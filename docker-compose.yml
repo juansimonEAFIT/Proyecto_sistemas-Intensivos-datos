@@ -1,0 +1,9 @@
+# docker-compose.yml — TiendaCol (E2)
+#
+# Marcador de posición. Los servicios se definen cuando el equipo cierre los ADR:
+#   ADR-1 streaming · ADR-2 procesamiento · ADR-4 componente libre · ADR-5 orquestación · ADR-6 plataforma
+#
+# La rúbrica del E2 pide un docker-compose.yml (o equivalente) en la raíz que levante
+# el pipeline desde cero siguiendo el README.
+
+services: {}

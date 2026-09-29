@@ -1,0 +1,24 @@
+# Datasets: pesan varios GB. Solo se versionan data/sample/ y data/README.md
+data/*
+!data/README.md
+!data/sample/
+
+# Secretos y credenciales
+.env
+kaggle.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Logs y temporales
+*.log
+~$*
+
+# Sistema operativo y OneDrive
+.DS_Store
+Thumbs.db
+desktop.ini
