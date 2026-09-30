@@ -7,7 +7,7 @@ Contexto completo, valores y reglas para agentes: CLAUDE.md (raíz del repo). En
 REPARTO Y ESTADO (integrantes)
   Integrante P1  Portada + Sección 1 + Sección 2.1 (RF) + Anexo A ............ listo para revisión
   Integrante P2  Sección 2.2 (RNF) + ADR-1 + ADR-2 ............................ pendiente
-  Integrante P3  Sección 3 (diagrama) + ADR-3 .................................. pendiente
+  Integrante P3  Sección 3 (diagrama) + ADR-3 ........ listo para revisión; falta publicar enlace editable
   Integrante P4  ADR-4 + ADR-5 + ADR-6 + Sección 5 (plan) ...................... pendiente
 
 PRESUPUESTO DE PÁGINAS
@@ -49,7 +49,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propues
 |---|---|
 | `Juan Simón Ospina Martínez` | `1000341990` |
 | `[Nombre completo P2]` | `[código]` |
-| `[Nombre completo P3]` | `[código]` |
+| `Daniel Arcila Salazar` | `1000331599` |
 | `[Nombre completo P4]` | `[código]` |
 
 <div style="page-break-after: always;"></div>
@@ -162,20 +162,20 @@ Para que los RF sean "trazables al diagrama", anotar sobre cada caja los ID de l
 Rúbrica (25 %): legible sin explicación adicional. Si necesita más de 2 minutos de explicación, le falta claridad.
 -->
 
-**Enlace editable:** `[URL de Draw.io / Lucidchart]`
+**Fuente editable:** [diagrama de Draw.io (`arquitectura.drawio`)](arquitectura.drawio) · **Enlace compartido:** `[PENDIENTE: publicar o subir el archivo en Draw.io y pegar aquí la URL editable]`
 
-![Diagrama de arquitectura de TiendaCol](arquitectura.png)
+![Diagrama de arquitectura de TiendaCol](arquitectura.svg)
 
 | Capa | Componentes (herramienta concreta) | Qué hace | RF que cumple |
 |---|---|---|---|
-| Fuente | `[...]` | `[...]` | RF-01, RF-02, RF-03, RF-04 |
-| Ingestión | `[...]` | `[...]` | RF-01, RF-02, RF-03, RF-04 |
-| Procesamiento | `[...]` | `[...]` | RF-05, RF-06, RF-07, RF-08, RF-09, RF-10, RF-13 |
-| Almacenamiento: Bronze | `[...]` | `[...]` | RF-01, RF-02, RF-04 |
-| Almacenamiento: Silver | `[...]` | `[...]` | RF-05, RF-06 |
-| Almacenamiento: Gold | `[...]` | `[...]` | RF-10, RF-11, RF-13 |
-| Consumo | `[...]` | `[...]` | RF-07, RF-08, RF-09, RF-11 |
-| Orquestación (transversal) | `[...]` | `[...]` | RF-12 |
+| Fuente | Generador Python con Faker `es_CO`; archivos REES46 y Olist | Emite clickstream, órdenes y cambios de stock como JSON continuo; publica catálogo y maestros en CSV cada día antes de las 6:00 a. m. La ciudad de una sesión, aun anónima, se genera como atributo de contexto de la sesión, sin identificar a la persona. | RF-01, RF-02, RF-03, RF-04 |
+| Ingestión | Apache Kafka en EC2; carga diaria de Airflow hacia S3 | Kafka recibe los flujos continuos con entrega *at-least-once*, particiones y retención para *replay*. Airflow deposita la carga diaria directamente en Bronze. | RF-01, RF-02, RF-03, RF-04 |
+| Procesamiento | Apache Spark Structured Streaming y Spark SQL en EC2 | Valida esquema, manda inválidos a cuarentena, deduplica por `event_id`, enriquece con catálogo, calcula ventanas de 15 y 1 minuto y sesiones de 30 minutos, y genera las agregaciones horarias de Gold. | RF-05, RF-06, RF-07, RF-08, RF-09, RF-10, RF-13 |
+| Almacenamiento: Bronze | Delta Lake en Amazon S3 (`bronze/`) | Conserva el dato recibido y sus metadatos de ingesta, sin aplicar reglas de negocio; permite releerlo y auditar la fuente. | RF-01, RF-02, RF-04 |
+| Almacenamiento: Silver | Delta Lake en Amazon S3 (`silver/` y `quarantine/`) | Guarda eventos válidos, deduplicados y enriquecidos; separa registros inválidos con la causa del rechazo. | RF-05, RF-06 |
+| Almacenamiento: Gold | Delta Lake en Amazon S3 (`gold/`), modelo estrella | Publica `fact_sales` y `fact_funnel_event` con dimensiones conformadas de fecha/hora, producto, cliente, vendedor, ubicación y dispositivo. Se particiona por fecha del evento. | RF-10, RF-11, RF-13 |
+| Consumo | Amazon Athena, Apache Superset, Amazon SNS y Amazon DynamoDB | Athena consulta Gold con SQL; Superset muestra el embudo, ventas y ventas por minuto; SNS entrega alertas de agotamiento; DynamoDB sirve la lista de carritos a Marketing. | RF-07, RF-08, RF-09, RF-11 |
+| Orquestación (transversal) | Apache Airflow con `LocalExecutor` en EC2 | Programa las cargas diaria y horaria, supervisa los jobs continuos, aplica dependencias, reintentos y notificación de fallos. | RF-12 |
 
 # 4. Justificación de decisiones técnicas (ADRs)
 
@@ -273,18 +273,37 @@ Preguntas que deben poder responder:
   8. En P4 "por ciudad": ¿de dónde sale la ciudad de una sesión anónima?
 -->
 
-**Contexto.** `[...]`
+**Contexto.** Los RF-10 y RF-11 exigen que Gold responda con una frescura máxima de una hora la conversión del embudo y las ventas por categoría, vendedor, región y fecha. Spark escribe simultáneamente resultados de streaming y de procesos horarios sobre S3 (ADR-2 y ADR-6), por lo que un conjunto de archivos Parquet sin capa transaccional podría dejar lecturas parciales durante una falla o un reintento. Además, el catálogo cambia cada día, llegan atributos distintos según la categoría y la garantía *at-least-once* obliga a realizar escrituras idempotentes. Gold necesita, por tanto, transacciones ACID, control y evolución del esquema, `MERGE` para corregir o reprocesar datos y versiones auditables. También debe ser consultable desde Spark y Athena, y presentar un modelo que los usuarios puedan recorrer sin reconstruir las relaciones operacionales.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Delta Lake | `[...]` | `[...]` |
-| Iceberg | `[...]` | `[...]` |
+| Delta Lake | Ofrece transacciones ACID con aislamiento serializable, unifica lectura y escritura *batch* y *streaming*, permite `MERGE`, evolución controlada del esquema y *time travel* sobre S3 [9]. Tiene integración directa con Spark y Athena puede consultar sus tablas con SQL y aprovechar estadísticas para omitir archivos [10]. El equipo ya usó esta combinación en el laboratorio del curso. | La partición es explícita y debe diseñarse y mantenerse; el log `_delta_log` y los archivos pequeños requieren compactación y limpieza periódicas. Su mejor integración sigue siendo con Spark, lo que aumenta el acoplamiento al ADR-2. |
+| Apache Iceberg | También ofrece aislamiento serializable, evolución segura del esquema, *time travel* y compatibilidad con Spark. Su particionamiento oculto y la evolución de la especificación permiten cambiar la distribución física sin reescribir consultas [11]. | Para este volumen y un único motor de escritura, la evolución avanzada de particiones no compensa incorporar otro catálogo y una tecnología que el equipo no ha usado. La implementación y la defensa tendrían más riesgo sin mejorar las preguntas P4 y P5. |
 
-**Decisión.** `[formato elegido + modelo dimensional: tablas de hechos con su grano y dimensiones]`
+**Decisión.** Se elige **Delta Lake sobre Amazon S3** para Bronze, Silver y Gold. En Gold se implementa un esquema en estrella con dimensiones conformadas y claves sustitutas:
 
-**Consecuencias.** `[...]`
+| Tabla | Grano | Contenido principal |
+|---|---|---|
+| `fact_sales` | Una línea de producto de una orden confirmada | `order_id` como dimensión degenerada, cantidad, precio unitario pagado, descuento y valor neto. El precio pagado queda en el hecho para no cambiar la historia cuando se actualiza el catálogo. |
+| `fact_funnel_event` | Un evento válido de `page_view`, `add_to_cart` o `purchase` para un producto dentro de una sesión | `event_id`, `session_id`, etapa, cantidad y claves de tiempo, producto, cliente, ubicación y dispositivo. Conserva al cliente desconocido para sesiones anónimas. |
+| `dim_datetime` | Un minuto calendario | Fecha, hora, día, semana y mes en hora de Colombia. |
+| `dim_product` | Una versión de un producto | Producto, nombre y categoría. Usa SCD tipo 2 (`valid_from`, `valid_to`, `is_current`) para conservar cambios de categoría; los nuevos atributos opcionales evolucionan el esquema. |
+| `dim_customer` | Un cliente identificado, más la fila “desconocido” | Identificador seudonimizado y estado de identificación. |
+| `dim_seller` | Un vendedor | Identificador y atributos comerciales del vendedor. |
+| `dim_location` | Una ciudad y departamento | Ciudad del contexto de sesión o de la orden; una fila “desconocida” evita perder eventos sin ubicación. |
+| `dim_device` | Un tipo de dispositivo o canal | Web de escritorio, web móvil o app. |
+
+P4 se obtiene contando sesiones distintas que alcanzan cada etapa de `fact_funnel_event` y dividiendo las que compran por las que ven un producto, agrupadas por categoría de `dim_product`, dispositivo, ciudad y hora o día. P5 suma el valor neto de `fact_sales`, cuenta `order_id` distintos y calcula el ticket promedio como **ventas / órdenes** —nunca como suma de promedios— por categoría, vendedor, región y fecha. Ambas tablas de hechos se particionan físicamente por la fecha del evento; no se particionan por categoría o vendedor para evitar muchas particiones pequeñas. Spark hace escrituras idempotentes con `MERGE` por `event_id` o por `(order_id, product_id)`, y Athena consulta las tablas Gold con SQL.
+
+**Consecuencias.**
+
+- Las transacciones ACID evitan que Athena lea una actualización incompleta, y el *time travel* permite reproducir una cifra y auditar cambios. A cambio, el equipo debe administrar el historial y definir políticas de retención y `VACUUM` sin borrar versiones todavía necesarias.
+- La historia del producto queda correcta mediante SCD tipo 2 y el precio pagado permanece en el hecho. Esto aumenta filas y obliga a resolver la clave sustituta vigente durante el enriquecimiento de Silver a Gold.
+- La partición diaria favorece P4 y P5, que filtran por tiempo, pero una consulta puntual por vendedor sin rango temporal escaneará más archivos. Los micro-*batches* pueden producir archivos pequeños, por lo que el DAG horario debe compactarlos.
+- Delta reduce el riesgo de implementación por su integración con Spark y la experiencia previa del equipo, pero crea mayor dependencia de ese ecosistema que Iceberg.
+- El esquema estrella duplica algunos atributos descriptivos y requiere procesos de dimensiones, pero simplifica las consultas y evita que Comercial tenga que unir el modelo transaccional. Los pares de productos del RF-13, si se implementan, se materializan como una tabla Gold derivada y no cambian el grano de los dos hechos obligatorios.
 
 ## ADR-4. Componente libre
 
@@ -447,10 +466,10 @@ Cada integrante implementa en el E2 los componentes de la sección del E1 que es
 |---|---|---|
 | **P1** · Juan Simón Ospina Martínez | Generador de eventos que simula las fuentes (clickstream, órdenes, stock, catálogo), carga diaria del catálogo y los maestros, y las pruebas de la columna "Cómo se verifica" de la Sección 2.1 | RF-04 · pruebas de todos los RF |
 | **P2** · `[nombre]` | Kafka, ingesta de las fuentes a Bronze y los jobs de streaming con Spark | RF-01, RF-02, RF-03, RF-07, RF-08, RF-09 |
-| **P3** · `[nombre]` | Bronze → Silver → Gold con Spark, modelo dimensional de Gold y consultas de consumo | RF-05, RF-06, RF-10, RF-11 · RF-13 si hay tiempo |
+| **P3** · Daniel Arcila Salazar | Bronze → Silver → Gold con Spark, modelo dimensional de Gold y consultas de consumo | RF-05, RF-06, RF-10, RF-11 · RF-13 si hay tiempo |
 | **P4** · Juan José Díaz Rodríguez | `docker-compose.yml`, EC2 y S3, los tres DAG de Airflow, la tabla de DynamoDB, README, bitácora de IA y PR | RF-12 · publicación del RF-08 |
 
-<!-- PENDIENTE (equipo): nombres de P2 y P3. Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
+<!-- PENDIENTE (equipo): nombre de P2. Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
 
 ## 5.2 Cronograma hasta S16
 
@@ -506,9 +525,12 @@ Como control de realismo: las ventas anuales de TiendaCol (≈ COP 194.000 millo
 6. Cámara Colombiana de Comercio Electrónico (CCCE). *Llega una nueva versión de Hot Sale en Colombia* (2025). https://ccce.org.co/noticias/llega-una-nueva-version-de-hotsale-en-colombia/
 7. Apache Software Foundation. *Running Airflow in Docker*, documentación de Apache Airflow 3.3.2 (consultada el 29 de septiembre de 2026). https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html
 8. Amazon Web Services. *DynamoDB read consistency*, Amazon DynamoDB Developer Guide (consultada el 29 de septiembre de 2026). https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html
+9. Delta Lake. *Welcome to the Delta Lake documentation* (consultada el 29 de septiembre de 2026). https://docs.delta.io/
+10. Amazon Web Services. *Query Delta Lake tables with SQL*, Amazon Athena User Guide (consultada el 29 de septiembre de 2026). https://docs.aws.amazon.com/athena/latest/ug/delta-lake-tables-querying.html
+11. Apache Software Foundation. *Evolution*, Apache Iceberg documentation (consultada el 29 de septiembre de 2026). https://iceberg.apache.org/docs/latest/evolution/
 
-<!-- P2, P3 y P4: agregar aquí sus referencias, desde la [7]. -->
-<!-- P4 usó la [7] y la [8]. La siguiente disponible es la [9]. -->
+<!-- P2, P3 y P4: agregar aquí sus referencias, sin repetir números. -->
+<!-- P4 usó la [7] y la [8]; P3 usó de la [9] a la [11]. La siguiente disponible es la [12]. -->
 
 <!--
 ====================================================================
