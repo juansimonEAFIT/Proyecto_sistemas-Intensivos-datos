@@ -114,8 +114,8 @@ Archivo: [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md).
 | 3. Diagrama | Integrante P3 | Solo estructura. La tabla de capas ya trae los RF de cada capa. |
 | 4. ADR-1 y ADR-2 | Integrante P2 | Solo estructura. |
 | 4. ADR-3 | Integrante P3 | Solo estructura. |
-| 4. ADR-4, ADR-5 y ADR-6 | Integrante P4 | Solo estructura. |
-| 5. Plan de implementación | Integrante P4 | Solo estructura. |
+| 4. ADR-4, ADR-5 y ADR-6 | Integrante P4 | Escritos el 2026-09-29, con pendientes de validación marcados como `<!-- PENDIENTE -->`. |
+| 5. Plan de implementación | Integrante P4 | Escrito el 2026-09-29. Faltan los nombres de P2 y P3, y validar el reparto del E2. |
 | Anexo A. Supuestos de dimensionamiento | Integrante P1 | Escrito. |
 | Referencias | Todos | [1] a [6] escritas por el integrante P1. Los demás agregan desde la [7]. |
 
@@ -226,7 +226,7 @@ Texto completo en la Sección 2.1. Los RF dicen **qué** hace el sistema, **no c
 | **P1** | Juan Simón Ospina Martínez (código 1000341990) | Negocio y requisitos funcionales | Portada, Sección 1, Sección 2.1, Anexo A |
 | **P2** | _(por definir)_ | Calidad y streaming | Sección 2.2 (RNF), ADR-1, ADR-2 |
 | **P3** | _(por definir)_ | Arquitectura | Sección 3 (diagrama + tabla de capas), ADR-3 |
-| **P4** | _(por definir)_ | Componentes y plan | ADR-4, ADR-5, ADR-6 (opcional), Sección 5, repo y PR |
+| **P4** | Juan José Díaz Rodríguez | Componentes y plan | ADR-4, ADR-5, ADR-6 (opcional), Sección 5, repo y PR |
 
 Al final hay **revisión cruzada** (P1 → P2, P2 → P3, P3 → P4, P4 → P1) usando la checklist del comentario final de `e1_tiendacol.md`.
 
@@ -238,12 +238,12 @@ Al final hay **revisión cruzada** (P1 → P2, P2 → P3, P3 → P4, P4 → P1) 
 
 | ADR | Decisión | Opciones a evaluar | Conceptos del curso a citar | Responsable | Estado |
 |---|---|---|---|---|---|
-| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | Pendiente |
-| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | Pendiente |
-| ADR-3 | Formato de Gold y modelo dimensional | Delta Lake, Iceberg | star schema, grano, ACID, schema evolution | Integrante P3 | Pendiente |
-| ADR-4 | Componente libre y su posición CAP | MongoDB, Cassandra, DynamoDB, Redis, Neo4j, Trino/Athena… | CAP (CP vs AP), sharding, partition key | Integrante P4 | Pendiente |
-| ADR-5 | Orquestación y dependencias del DAG | Airflow, Dagster, Prefect | DAG, dependencias, reintentos, idempotencia | Integrante P4 | Pendiente |
-| ADR-6 *(opcional)* | Plataforma | AWS, GCP, local con Docker | costo, reproducibilidad, servicios gestionados | Integrante P4 | Pendiente; conviene decidirlo pronto porque limita a los demás (Kinesis y Athena solo existen en AWS) |
+| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | **Decidido por el equipo (2026-09-29): Kafka con at-least-once.** Falta redactarlo. Kinesis queda descartado por el ADR-6 (cobra por shard-hora) |
+| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | **Decidido por el equipo (2026-09-29): Spark.** Falta redactarlo. Ojo: con at-least-once, los jobs de RF-07 a RF-09 leen de Kafka antes de Silver y también tienen que eliminar duplicados por identificador de evento |
+| ADR-3 | Formato de Gold y modelo dimensional | Delta Lake, Iceberg | star schema, grano, ACID, schema evolution | Integrante P3 | Pendiente. Por el ADR-6, Gold vive en S3: Delta Lake e Iceberg siguen siendo opciones |
+| ADR-4 | Componente libre y su posición CAP | MongoDB, Cassandra, DynamoDB, Redis, Neo4j, Trino/Athena… | CAP (CP vs AP), sharding, partition key | Integrante P4 | **Escrito (2026-09-29): DynamoDB bajo demanda para el RF-08, AP, partition key `user_id`.** Falta confirmar que el Learner Lab permita crear tablas; plan B, MongoDB |
+| ADR-5 | Orquestación y dependencias del DAG | Airflow, Dagster, Prefect | DAG, dependencias, reintentos, idempotencia | Integrante P4 | **Escrito (2026-09-29): Airflow con `LocalExecutor`, tres DAG.** Falta validarlo con el equipo |
+| ADR-6 *(opcional)* | Plataforma | AWS, GCP, local con Docker | costo, reproducibilidad, servicios gestionados | Integrante P4 | **Escrito (2026-09-29): AWS Academy, híbrido.** Contenedores en EC2 para lo que cobraría por hora, S3 y servicios por uso para el resto |
 
 **Cuando el equipo tome una decisión:** actualizar la columna "Estado" de esta tabla con la opción elegida y la fecha, y escribir el ADR en el documento.
 
@@ -350,9 +350,10 @@ Al terminar una tarea relevante, darle al humano en el chat un resumen de 2–3 
 
 ### 9.7 Git
 
-- Remoto: `https://github.com/juansimonEAFIT/Proyecto_sistemas-Intensivos-datos.git` (rama `main`, todavía sin commits).
-- El flujo de ramas y PR **no está acordado**. Lo coordina el integrante P4 (repo y PR). La guía exige un PR abierto con la descripción del proyecto para el E1 y el PR final antes de S16.
-- No hacer commit, push ni abrir PRs sin que el humano lo pida.
+- Remoto: `https://github.com/juansimonEAFIT/Proyecto_sistemas-Intensivos-datos.git`.
+- **Flujo de ramas y PR: acordado el 2026-09-29, detallado en [CONTRIBUTING.md](CONTRIBUTING.md).** Lo coordina el integrante P4. Resumen: `main` solo recibe entregas; el E1 se escribe directo en la rama `e1`; el código del E2 va en ramas `p<n>/<tema>` que entran por PR a `e2`, y cada PR lo aprueba otro integrante. El PR `e1 → main` es el que pide la guía para el E1, y el PR `e2 → main` es el "PR final con todo el código" de S16.
+- Antes de editar, confirmar en qué rama se está: el documento del E1 se edita en `e1`, nunca en `main`.
+- No hacer commit, push ni abrir PRs. El agente le entrega al humano los comandos y el mensaje de commit, y el humano los ejecuta.
 - La carpeta local está dentro de OneDrive. Si varias personas trabajan a la vez, es más seguro que cada una clone el repo en una carpeta fuera de OneDrive.
 
 ---
@@ -364,7 +365,10 @@ Las carpetas y archivos marcados con **(E2)** ya existen como **marcadores de po
 ```
 /
 ├── CLAUDE.md                      # este archivo: fuente de verdad para humanos y agentes
+├── CONTRIBUTING.md                # flujo de ramas y PR del equipo (ver §9.7)
 ├── README.md                      # descripción; en E2, cómo correr el pipeline desde cero
+├── .github/
+│   └── pull_request_template.md   # plantilla que GitHub carga al abrir un PR
 ├── docker-compose.yml             # (E2) levanta todos los servicios, o su equivalente según el ADR-6
 ├── .env.example                   # (E2) variables de configuración, sin secretos
 ├── .gitignore                     # (E2) excluye data/, credenciales y archivos temporales

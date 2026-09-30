@@ -13,7 +13,7 @@ El contexto completo, las restricciones, las decisiones pendientes, los enlaces 
 | E1: documento + diagrama (sin código) | En construcción: ver [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md) |
 | E2: código + presentación + demo | No iniciado |
 
-Decisiones de arquitectura (ADRs): **ninguna tomada todavía**. Ver la Sección 4 de [e1_tiendacol.md](docs/entregable1/e1_tiendacol.md).
+Decisiones de arquitectura (ADRs), al 2026-09-29: plataforma **AWS Academy híbrida** (ADR-6), orquestación con **Airflow** (ADR-5), componente libre **DynamoDB** (ADR-4), y **Kafka con at-least-once** y **Spark** acordados por el equipo (ADR-1 y ADR-2, por redactar). El estado de cada una está en la §7 de [CLAUDE.md](CLAUDE.md).
 
 ## Estructura del repositorio
 
@@ -22,7 +22,10 @@ Las carpetas de componentes son marcadores de posición para E2: cada una tiene 
 ```
 /
 ├── CLAUDE.md               # contexto del proyecto y reglas para agentes de IA
+├── CONTRIBUTING.md         # flujo de ramas y Pull Requests del equipo
 ├── README.md               # este archivo
+├── .github/
+│   └── pull_request_template.md
 ├── docker-compose.yml      # (E2) servicios del pipeline; aún sin definir
 ├── .env.example            # variables de entorno (copiar a .env)
 ├── .gitignore
@@ -40,6 +43,10 @@ Las carpetas de componentes son marcadores de posición para E2: cada una tiene 
 ├── serving/                # componente libre, alertas, tableros y consultas
 └── tests/                  # verificación de los RF
 ```
+
+## Cómo colaborar
+
+`main` solo recibe entregas. El E1 se escribe en la rama `e1` y el código del E2 entra por Pull Request a `e2`. El flujo completo, con los comandos, está en [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Cómo correr el pipeline
 
