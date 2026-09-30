@@ -140,12 +140,17 @@ Nota: RF-05 elimina duplicados porque la FUENTE los genera (la app reenvía even
 
 | ID | Categoría | Requisito | Valor concreto | Cómo se mide |
 |---|---|---|---|---|
-| RNF-01 | Escalabilidad | `[...]` | `[...]` | `[...]` |
-| RNF-02 | Disponibilidad (CAP) | `[...]` | `[...]` | `[...]` |
-| RNF-03 | Consistencia (garantía de entrega) | `[...]` | `[...]` | `[...]` |
-| RNF-04 | Latencia | `[...]` | `[...]` | `[...]` |
-| RNF-05 | Tolerancia a fallos | `[...]` | `[...]` | `[...]` |
-| RNF-06 | Trazabilidad | `[...]` | `[...]` | `[...]` |
+| RNF-01 | Escalabilidad | El sistema debe absorber el pico de navegación sin degradar la latencia de RNF-04, y crecer agregando particiones y ejecutores de Spark, no rediseñándose. | Capacidad de diseño: **5.000 eventos/s** (pico de ≈ 3.000 del Anexo A más margen). Clickstream en 6 particiones (ADR-1). Una sola EC2 puede no alcanzarla (ADR-6): se reporta el máximo medido. | El generador sube la carga por escalones hasta 5.000 ev/s o hasta donde aguante la EC2. Se mide el retraso del consumidor (*consumer lag*) y la latencia de RNF-04: el retraso no debe crecer de forma sostenida. |
+| RNF-02 | Disponibilidad (CAP) | La posición CAP se define por componente. Kafka y Delta Lake priorizan **consistencia (CP)**; la lista de carritos en DynamoDB prioriza **disponibilidad (AP)** (ADR-4). | Kafka: *acks=all* y un solo broker en el E1; en producción, 3 brokers con `min.insync.replicas=2` (CP). Delta Lake en S3: escrituras ACID con aislamiento serializable (ADR-3). DynamoDB: lectura del índice eventualmente consistente (ADR-4). | Se inspecciona la configuración de cada componente. Se detiene un broker de prueba y se verifica que el productor no confirme escrituras sin réplica suficiente. |
+| RNF-03 | Consistencia (garantía de entrega) | El sistema no debe perder eventos entre la fuente y Bronze, y no debe contar dos veces un evento duplicado. | ***At-least-once*** de la fuente a Kafka y de Kafka a Bronze y a los jobs de streaming. La deduplicación por `event_id` la hacen los jobs de streaming (RF-07 a RF-09) y Silver (RF-05). Las escrituras a Delta usan `MERGE`, de modo que reprocesar da el mismo resultado (ADR-1, ADR-2, ADR-3). | **0** eventos perdidos y **0** duplicados en Silver y Gold: se envían 10.000 eventos de prueba y 100 de ellos se reenvían, como hace la app. Bronze conserva los 10.100 recibidos y Silver queda con 10.000 únicos. |
+| RNF-04 | Latencia | La latencia se mide del momento del evento a su disponibilidad, separando el tiempo real de la frescura analítica. | Alerta de agotamiento (RF-07) y ventas por minuto (RF-09): máx. **2 min**. Lista de carritos (RF-08): máx. **5 min** tras cumplirse los 30 de inactividad. Evento a Gold (RF-10, RF-11): máx. **1 hora**. | Diferencia entre la hora del evento y la hora de la alerta, del tablero o de la fila en Gold, con los eventos de prueba de cada RF. Se reporta el máximo observado en la demo. |
+| RNF-05 | Tolerancia a fallos | Si un job de Spark falla, debe reanudarse solo desde donde quedó, sin perder ni duplicar eventos. Si la EC2 falla, no deben perderse los datos de Bronze, Silver y Gold. | Job de Spark: reinicio por Airflow en máx. **5 min** (ADR-5) desde su *checkpoint* en S3; durante ese lapso RF-07 puede no cumplir sus 2 min. EC2 caída: Bronze, Silver y Gold siguen en S3; se levanta otra EC2 con el mismo `docker-compose.yml`. `[PENDIENTE: tiempo máximo de recuperación de la EC2]` | Se detiene a la fuerza el contenedor del job en plena carga. Se mide el tiempo hasta que reanuda y se comprueba que los conteos en Silver coinciden con los enviados, sin pérdidas ni duplicados. |
+| RNF-06 | Trazabilidad | Debe poder seguirse cualquier cifra de Gold hasta el evento u orden de origen. | Bronze guarda el `event_id`, la fuente, la hora de ingestión y la partición y el *offset* de Kafka. Silver y Gold conservan `event_id` u `order_id`. Los registros rechazados quedan en `quarantine/` con su causa. El *time travel* de Delta (ADR-3) permite reproducir una cifra pasada. | **100 %** de las filas de `fact_funnel_event` y `fact_sales` enlazan con su registro en Bronze mediante `event_id` u `order_id`. Se verifica con una consulta de cruce. |
+
+<!-- PENDIENTE (P2 y equipo): los valores de particiones y del reinicio de 5 min vienen del ADR-1 y del ADR-5. El tiempo máximo de recuperación de la EC2 (RNF-05) falta definirlo con P4. La disponibilidad en % no se fija: una sola EC2 en un laboratorio con temporizador (ADR-6) no permite prometerla, y el E1 no representa alta disponibilidad (nota del diagrama). -->
+
+<!-- Defensa (P2): RNF-02, CAP por componente. Kafka con un solo broker no sufre particiones de red, así que su posición CAP es teórica en el E1; con 3 brokers y `min.insync.replicas=2` rechazaría escrituras sin quórum (CP). RNF-03: "exactly-once" de extremo a extremo exigiría además un destino transaccional en cada salida; aquí se logra el efecto solo donde importa (Delta con MERGE), y por eso la garantía es at-least-once + deduplicación. -->
+
 
 # 3. Diagrama de arquitectura de datos por capas
 
@@ -204,19 +209,40 @@ Preguntas que deben poder responder:
   6. ¿Está atado a una plataforma (ADR-6)?
 -->
 
-**Contexto.** `[...]`
+**Contexto.** Los RF-01, RF-07, RF-08 y RF-09 exigen procesar el clickstream en tiempo real, y el enunciado prohíbe simular el streaming con batch. El tráfico pasa de ≈ 29 eventos/s en un día normal a ≈ 3.000 en la apertura de ofertas de Black Friday, con una capacidad objetivo de 5.000 eventos/s (Anexo A), unos 5 MB/s a 1 KB por evento. Hace falta un transporte que amortigüe esos picos entre la fuente y el procesamiento, que conserve los eventos para poder reprocesarlos tras una falla y que reparta el trabajo en paralelo. Además, la app reenvía eventos cuando pierde conexión, así que los duplicados nacen en la fuente (RF-05). Por el ADR-6, el transporte corre en un contenedor de la misma EC2 que Spark y Airflow, y se descartan los servicios que cobran por hora encendidos.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Kafka | `[...]` | `[...]` |
-| Kinesis | `[...]` | `[...]` |
-| Redpanda | `[...]` | `[...]` |
+| Kafka | Es la referencia que cita la guía del curso (S6-S7). Corre en un contenedor del `docker-compose.yml` y no cobra por hora. Las particiones reparten la carga y conservan el orden dentro de cada una. La retención permite releer eventos (*replay*). Se integra con Spark Structured Streaming, que guarda los *offsets* leídos en su *checkpoint*. | Hay que operarlo: versiones compatibles con Spark y memoria de la EC2. Con un solo broker no hay réplicas. |
+| Kinesis | Gestionado: AWS lo opera y lo escala por *shards*. | Cobra por *shard*-hora encendido, y con USD 50 de presupuesto un recurso olvidado pone en riesgo la cuenta (ADR-6). No corre en un `docker-compose.yml`, que exige el E2, y solo existe en AWS. |
+| Redpanda | Compatible con la API de Kafka y más liviano en memoria. | La guía no lo cita y el equipo no lo ha usado. Su ahorro de memoria no compensa aprender otra herramienta en las tres semanas antes de S16, cuando Kafka ya cubre el requisito. |
 
-**Decisión.** `[...]`
+**Decisión.** Se elige **Apache Kafka** en un contenedor de la EC2, con garantía ***at-least-once***. Las dos garantías descartadas fallan en este problema. *At-most-once* puede perder eventos: perder un `add_to_cart` esconde un carrito del RF-08 y no se puede recuperar. Un duplicado, en cambio, se elimina por `event_id`, así que para este problema duplicar es menos grave que perder. *Exactly-once* de extremo a extremo exigiría además un destino transaccional en cada salida [12][13]; el equipo lo logra solo donde importa, en Delta Lake con `MERGE` (ADR-3). El resultado es at-least-once con deduplicación, que tiene el mismo efecto en Gold.
 
-**Consecuencias.** `[...]`
+La garantía se configura en tres puntos. El productor usa `acks=all` e idempotencia, lo que evita duplicados por sus propios reintentos hacia Kafka [12]. Spark guarda en su *checkpoint* los *offsets* leídos y los avanza después de escribir en el destino: si el job cae a mitad de un lote, relee ese lote y lo procesa otra vez [13]. Los duplicados de la fuente, más los de esa relectura, se eliminan por `event_id` en los jobs de streaming (ADR-2) y en Silver (RF-05).
+
+Diseño de los topics `[propuesta de P2, pendiente de validar con el equipo]`:
+
+| Topic | Clave de partición | Particiones | Por qué |
+|---|---|---|---|
+| `clickstream` | `user_id` (`session_id` si el usuario es anónimo) | 6 | El orden solo se garantiza dentro de una partición [12]: con esta clave, los eventos de un mismo usuario llegan en orden, lo que necesita el RF-08 para saber si hubo compra después del carrito. Reparte la carga de forma pareja. Seis particiones dejan unos 830 ev/s por partición a 5.000 ev/s, permiten hasta seis tareas de Spark en paralelo y no gastan la memoria de la EC2. |
+| `orders` | `order_id` | 3 | Volumen bajo (24.000 órdenes en un día de Black Friday). Con `product_id` como clave, un producto en tendencia saturaría una sola partición (partición caliente). |
+| `stock_changes` | `product_id` | 3 | El último cambio de stock de cada producto debe procesarse en orden (RF-03). |
+
+El RF-07 agrupa por producto, pero no se usa `product_id` como clave del clickstream: Spark reagrupa por producto al calcular la ventana, y así se evita la partición caliente. La retención es de **7 días**, suficiente para reprocesar tras un fin de semana con el laboratorio apagado por su temporizador (ADR-6).
+
+**Consecuencias.**
+
+- **Los duplicados llegan a los consumidores.** Todo job de streaming tiene que deduplicar por `event_id`, lo que cuesta memoria para guardar los identificadores recientes y algo de latencia.
+- **Un solo broker significa sin réplicas.** Si se cae o pierde su disco, el flujo se detiene y los eventos aún no leídos pueden perderse. `acks=all` no añade durabilidad sin una segunda réplica. En un despliegue real serían tres brokers con factor de replicación 3 y `min.insync.replicas=2`.
+- **El orden solo existe por usuario.** No hay orden global entre usuarios, y cualquier cálculo por producto implica que Spark reparta los datos de nuevo entre tareas.
+- **Las particiones no se reducen, y aumentarlas cambia a qué partición va cada clave**, lo que rompe el orden de los eventos ya guardados. Por eso se fija el número desde ahora con margen.
+- **La retención ocupa disco.** Siete días son unos 18 GB en un día normal (2,5 millones de eventos a 1 KB, unos 2,5 GB por día) pero unos 170 GB con el tráfico de Black Friday. El tamaño del disco de la EC2 queda pendiente en el ADR-6.
+- **Kafka consume memoria de la EC2** que comparte con Spark y Airflow, y su versión debe ser compatible con el conector de Spark (riesgo de la Sección 5).
+
+<!-- PENDIENTE (P2 y equipo): el diseño de topics, claves, particiones (6/3/3) y la retención de 7 días los propuso P2 con el agente; falta validarlos con el equipo. Confirmar con P1 (generador) que el evento trae `user_id` o `session_id`, y con P4 el disco de la EC2. -->
 
 ## ADR-2. Motor de procesamiento
 
@@ -529,8 +555,11 @@ Como control de realismo: las ventas anuales de TiendaCol (≈ COP 194.000 millo
 10. Amazon Web Services. *Query Delta Lake tables with SQL*, Amazon Athena User Guide (consultada el 29 de septiembre de 2026). https://docs.aws.amazon.com/athena/latest/ug/delta-lake-tables-querying.html
 11. Apache Software Foundation. *Evolution*, Apache Iceberg documentation (consultada el 29 de septiembre de 2026). https://iceberg.apache.org/docs/latest/evolution/
 
+12. Apache Software Foundation. *Design: Message Delivery Semantics*, documentación de Apache Kafka (consultada el 30 de septiembre de 2026). https://kafka.apache.org/43/design/design/
+13. Apache Software Foundation. *Structured Streaming Programming Guide*, documentación de Apache Spark (consultada el 30 de septiembre de 2026). https://spark.apache.org/docs/latest/streaming/getting-started.html
+
 <!-- P2, P3 y P4: agregar aquí sus referencias, sin repetir números. -->
-<!-- P4 usó la [7] y la [8]; P3 usó de la [9] a la [11]. La siguiente disponible es la [12]. -->
+<!-- P4 usó la [7] y la [8]; P3 usó de la [9] a la [11]; P2 usó la [12] y la [13]. La siguiente disponible es la [14]. -->
 
 <!--
 ====================================================================
