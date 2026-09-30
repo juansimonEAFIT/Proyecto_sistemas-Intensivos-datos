@@ -265,19 +265,40 @@ Preguntas que deben poder responder:
   7. Batch puro no sirve para el tiempo real (lo prohíbe el enunciado): expliquen por qué se descarta y si sirve en otra parte del pipeline.
 -->
 
-**Contexto.** `[...]`
+**Contexto.** Los RF-07, RF-08 y RF-09 necesitan cálculos sobre ventanas de tiempo con latencias de minutos: la velocidad de venta de los últimos 15 minutos, recalculada cada minuto (RF-07), el carrito sin actividad durante 30 minutos (RF-08) y las ventas por minuto (RF-09). Los tres exigen resultados en máximo 2 minutos, salvo el RF-08, que tiene 5 minutos después de cumplidos los 30. El RF-06 pide un *join* con el catálogo y los maestros, y los RF-10 y RF-11 piden agregaciones cada hora sobre muchos datos. El enunciado exige Spark en al menos una transformación no trivial, y prohíbe resolver el tiempo real con batch. Por el ADR-1, los jobs leen de Kafka con garantía *at-least-once*, así que reciben duplicados. Por el ADR-6, todo corre en una EC2 cuya memoria comparten Kafka, Spark y Airflow.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Spark Structured Streaming | `[...]` | `[...]` |
-| Flink | `[...]` | `[...]` |
-| Batch puro | `[...]` | `[...]` |
+| Spark Structured Streaming | Procesa en *micro-batch* (lotes cada pocos segundos), y con una latencia de segundos cumple holgadamente los 2 minutos. Tiene ventanas deslizantes (RF-07), fijas (RF-09) y de sesión (RF-08), *watermarks* para eventos tardíos y *checkpoints* para reanudar [13][14]. El mismo motor sirve para el batch horario de Silver y Gold, y cumple la restricción de usar Spark. La guía del curso lo cita en S4-S5. | Su latencia mínima es la del lote, no la del evento. Los lotes pequeños producen muchos archivos pequeños en Delta Lake. Consume memoria de la EC2. |
+| Flink | Procesa evento por evento, con latencia de milisegundos, y maneja el estado y las sesiones de forma muy natural. | Esa latencia no aporta nada: las decisiones que pide el problema toleran minutos. Además, por el enunciado Spark tendría que aparecer igualmente en Silver y Gold, así que el equipo operaría dos motores a la vez en una EC2 compartida. |
+| Batch puro | Es lo más simple de operar y basta para el RF-05, el RF-06, el RF-10 y el RF-11. | No resuelve los RF-07 a RF-09: un proceso que corre cada cierto tiempo no entrega una alerta en 2 minutos sin volverse un micro-batch, y el enunciado prohíbe simular el streaming con batch. Sí se conserva en el batch horario de Silver y Gold. |
 
-**Decisión.** `[...]`
+**Decisión.** Se elige **Spark Structured Streaming** para el tiempo real y **Spark SQL en batch horario** para Silver y Gold, sobre un mismo motor. Un *trigger* de 30 segundos deja cada resultado a unos segundos de su lote y cumple los 2 minutos con margen. La división de trabajo es esta:
 
-**Consecuencias.** `[...]`
+- **Streaming (lee de Kafka).** Escribe el dato crudo a Bronze, sin transformarlo, y calcula los RF-07, RF-08 y RF-09. No escribe en Silver: lo hace el batch horario (ADR-5), que también valida, aparta en cuarentena y deduplica por `event_id` (RF-05). Los registros que no cumplen el esquema se ignoran en los cálculos del streaming, pero se conservan en Bronze para que el batch los aparte.
+- **RF-07, ventana deslizante.** Ventana de 15 minutos que se desliza cada minuto, agrupada por producto, sobre las ventas (*join* con el stock actual de cada producto, que el job guarda como estado por clave a partir de `stock_changes`, RF-03). El resultado sale en modo `update`, sin esperar a que cierre la ventana, y publica la alerta por SNS cuando la cobertura baja de 60 minutos.
+- **RF-08, ventana de sesión.** Ventana de sesión con hueco de 30 minutos por usuario. Como la sesión se cierra por inactividad, detecta la ausencia de una compra de esta manera: al cerrarse, si la sesión no contiene ningún `purchase`, tiene un usuario identificado y el valor del carrito es de COP 500.000 o más, se escribe en DynamoDB con `user_id` como clave (ADR-4).
+- **RF-09, ventana fija.** Ventana de 1 minuto con el número de órdenes y el valor en COP, en total y por categoría (*join* con el catálogo). Se escribe en una tabla Gold de métricas por minuto que Superset consulta por Athena. Las métricas que llegan tarde se corrigen cuando el batch horario recalcula Gold desde Silver.
+- **Deduplicación y *watermarks*.** Los jobs eliminan duplicados por `event_id` con un *watermark*, que acota la memoria que ocupan los identificadores ya vistos [14]. *Watermark* de **1 minuto** para el RF-07 y el RF-09, y de **3 minutos** para el RF-08. En modo `append`, el resultado de una ventana sale después de pasar el *watermark* [14]: con 1 minuto más el *trigger* de 30 segundos, el RF-09 sale en unos 1,5 minutos y cumple los 2; con 3 minutos, una sesión del RF-08 sale unos 33,5 minutos después de su último evento y cumple los 35.
+- ***Checkpoints*.** Cada job guarda su *checkpoint* (offsets leídos y estado) en S3, no en el disco de la EC2, para reanudar desde donde quedó aunque se pierda la instancia (ADR-6). Como los *offsets* avanzan después de escribir, una falla a mitad de lote relee ese lote; los duplicados que eso genera los absorbe `MERGE` en Delta (ADR-3) [13].
+- **Recursos.** Los tres jobs y la escritura a Bronze corren como **una sola aplicación de Spark con varias consultas**, para pagar una sola vez la memoria del proceso principal en la EC2.
+
+**Consecuencias.**
+
+- **La latencia mínima es la del lote (30 s), no la del evento.** Si el problema pidiera respuestas en milisegundos, habría que pasar a Flink.
+- **El *watermark* descarta lo que llega más tarde.** Un evento de la app con más de 1 minuto de retraso no cuenta en las métricas de tiempo real, y un duplicado que llegue después del *watermark* no se elimina en el streaming. Los dos se corrigen en el batch horario, que recalcula desde Bronze, así que las cifras de tiempo real pueden diferir un poco de las de Gold hasta esa hora.
+- **El RF-08 llega justo al límite de 5 minutos:** 3 de *watermark* más 30 segundos de *trigger* dejan poco margen. Hay que medirlo en el E2 y, si no alcanza, bajar el *watermark*, a costa de aceptar menos eventos tardíos.
+- **El *watermark* solo avanza cuando llegan eventos nuevos.** Con poco tráfico (por ejemplo, de madrugada) una ventana puede tardar más en cerrarse y su resultado sale con retraso. En la demo, el generador mantiene el flujo continuo.
+- **Los lotes de 30 segundos crean archivos pequeños en Delta Lake**, y el DAG horario tiene que compactarlos (ADR-3).
+- **Si se cae la aplicación de Spark, se caen todos los jobs a la vez.** Es el precio de ahorrar memoria en una sola EC2. Airflow la reinicia en un máximo de 5 minutos (ADR-5) y, mientras tanto, el RF-07 no cumple sus 2 minutos.
+- **Silver se actualiza cada hora, no en tiempo real.** Es suficiente para el RF-10 y el RF-11, que piden frescura de 1 hora.
+- **El diseño de Delta Lake y Athena para las métricas por minuto** añade el tiempo de consulta de Athena y de refresco de Superset al presupuesto de 2 minutos del RF-09.
+
+<!-- PENDIENTE (P2 y equipo): (1) Silver lo produce solo el batch: es la recomendación del agente, aceptada por P3 en el chat y falta que P3 actualice el diagrama. (2) El canal de RF-09 (tabla Gold de métricas por minuto consultada con Athena) lo propuso el agente y falta validarlo con P3: el diagrama todavía dice que "debe concretarse". (3) Los valores de trigger (30 s) y watermark (1 min y 3 min), y que el stock actual se guarde como estado por clave, los propuso P2 con el agente; falta validarlos y medirlos en el E2. -->
+
+<!-- Defensa (P2): ¿por qué micro-batch cumple? Los 2 minutos son 120 s y el trigger es de 30 s. RF-08 detecta la AUSENCIA de un purchase con una ventana de sesión: si se cierra sin ningún purchase, el carrito quedó abandonado. El watermark manda el compromiso: más grande tolera más eventos tardíos pero retrasa la salida; por eso 1 min (2 min de tope) y 3 min (5 min de tope). Si eligieran Flink, Spark seguiría en Silver y Gold. -->
 
 ## ADR-3. Formato de la capa Gold y modelo dimensional
 
@@ -558,8 +579,10 @@ Como control de realismo: las ventas anuales de TiendaCol (≈ COP 194.000 millo
 12. Apache Software Foundation. *Design: Message Delivery Semantics*, documentación de Apache Kafka (consultada el 30 de septiembre de 2026). https://kafka.apache.org/43/design/design/
 13. Apache Software Foundation. *Structured Streaming Programming Guide*, documentación de Apache Spark (consultada el 30 de septiembre de 2026). https://spark.apache.org/docs/latest/streaming/getting-started.html
 
+14. Apache Software Foundation. *Structured Streaming Programming Guide: APIs on DataFrames and Datasets* (ventanas, *watermarks*, deduplicación y *joins*), documentación de Apache Spark (consultada el 30 de septiembre de 2026). https://spark.apache.org/docs/latest/streaming/apis-on-dataframes-and-datasets.html
+
 <!-- P2, P3 y P4: agregar aquí sus referencias, sin repetir números. -->
-<!-- P4 usó la [7] y la [8]; P3 usó de la [9] a la [11]; P2 usó la [12] y la [13]. La siguiente disponible es la [14]. -->
+<!-- P4 usó la [7] y la [8]; P3 usó de la [9] a la [11]; P2 usó de la [12] a la [14]. La siguiente disponible es la [15]. -->
 
 <!--
 ====================================================================
