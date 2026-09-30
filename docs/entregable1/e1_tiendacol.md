@@ -304,21 +304,31 @@ Preguntas que deben poder responder:
   6. Si es un motor de consulta (Trino/Athena), CAP aplica menos: justifiquen con separación de cómputo y almacenamiento, formatos soportados y costo por datos escaneados.
 -->
 
-**Contexto.** `[...]`
+**Contexto.** El RF-08 exige publicar para Marketing, en máximo 5 minutos, la lista de carritos abandonados de alto valor. Eso tiene dos patrones de acceso: buscar el carrito de un usuario puntual y listar los carritos abandonados del día, de mayor a menor valor. El job de streaming actualiza estos registros sin parar, y con la garantía at-least-once del ADR-1 puede escribir el mismo evento más de una vez. El lakehouse no sirve para esto: Delta Lake o Iceberg en S3 son buenos para recorrer muchos datos de una vez, no para responder en milisegundos por una clave que cambia cada pocos segundos. Por el ADR-6, el componente tiene que correr en un contenedor o cobrar por uso, y la EC2 ya comparte su memoria entre el broker, Spark y Airflow.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| MongoDB | `[...]` | `[...]` |
-| Cassandra | `[...]` | `[...]` |
-| Redis | `[...]` | `[...]` |
-| Neo4j | `[...]` | `[...]` |
-| Trino / Athena | `[...]` | `[...]` |
+| DynamoDB (bajo demanda) | Búsqueda por clave en milisegundos. Es distribuido de verdad y la consistencia se elige en cada lectura. Cobra por petición y no usa memoria de la EC2. Guardar por clave reemplaza el registro, así que los duplicados de at-least-once no hacen daño. | Solo existe en AWS. Solo responde bien a las consultas para las que se diseñaron sus claves. El equipo no lo ha usado. |
+| MongoDB | Guarda cada carrito como un documento con sus productos, sin esquema fijo. Consistencia configurable con *write concern* y *read concern*. | En una sola EC2 corre con un solo nodo: nunca hay partición de red, así que su posición CAP sería teórica. Consume memoria de la EC2. |
+| PostgreSQL | El equipo lo conoce. Consultas SQL libres. `INSERT … ON CONFLICT` tolera duplicados. | Contradice la Sección 1.5, que argumenta contra las bases relacionales por su esquema rígido y su escalado vertical. Con un solo nodo, el CAP tampoco aplica. El compose de Airflow ya trae un PostgreSQL para sus metadatos, y mezclar ahí datos de negocio es mala práctica. |
+| Cassandra | AP con consistencia ajustable. Hecha para muchas escrituras. | Es la más pesada en memoria, en una EC2 compartida. Su fuerza es la escritura masiva distribuida, que con un solo nodo no se aprovecha. |
+| Redis | La más rápida en búsquedas por clave. | Vive en memoria: compite por RAM con Airflow y Spark, y sin configurar persistencia pierde los datos al reiniciar. |
+| Neo4j | Modela relaciones entre productos. | Solo serviría para el RF-13, que es opcional. No resuelve el RF-08. |
+| Trino / Athena | SQL sobre Gold sin mover los datos, separando cómputo y almacenamiento. | Son motores de consulta analítica: no responden en milisegundos por clave. Atienden el RF-11, no el RF-08. |
 
-**Decisión.** `[componente + posición CAP + partition key]`
+**Decisión.** Se elige DynamoDB en modo bajo demanda para servir la lista del RF-08. La tabla `carritos_abandonados` usa `user_id` como partition key: cada usuario tiene a lo sumo un carrito activo, así que la clave reparte la carga de forma pareja entre particiones y responde la búsqueda de un usuario puntual. Un índice secundario global usa la fecha de abandono como partition key y el valor en COP como sort key, para listar los carritos del día de mayor a menor valor. El job de streaming del RF-08 (ADR-2) escribe cada carrito con su `user_id`, de modo que un evento duplicado reemplaza el registro en lugar de duplicarlo. En CAP, la lista de Marketing se lee desde el índice, cuyas lecturas son siempre eventualmente consistentes [8]: para Marketing es peor que la lista no cargue que verla con segundos de atraso, dentro de un plazo de 5 minutos. El sistema favorece la disponibilidad (AP). Antes de enviar un cupón, la búsqueda del usuario puntual se hace con lectura fuertemente consistente sobre la tabla base [8], que sí la permite, para no premiar a alguien que acaba de comprar. Los contenedores acceden a DynamoDB con el mismo rol de instancia de la EC2 (ADR-6).
 
-**Consecuencias.** `[...]`
+<!-- PENDIENTE (P4): la consola del Learner Lab abre el formulario de "Crear tabla" de DynamoDB (verificado el 2026-09-29), pero falta confirmar que la creación funcione, creando y borrando una tabla de prueba en modo bajo demanda. Si no funciona, el plan B es MongoDB en contenedor, y este ADR se reescribe. El diseño de claves e índice lo propuso el agente y falta validarlo con el equipo. -->
+
+**Consecuencias.**
+
+- **Dependencia de AWS.** DynamoDB solo existe en AWS y no forma parte del `docker-compose.yml`: vive fuera de la EC2. Para desarrollar sin gastar presupuesto, se puede usar DynamoDB Local en un contenedor.
+- **Las consultas quedan atadas al diseño de claves.** Una pregunta nueva, como "carritos por ciudad", necesita otro índice. Esa flexibilidad se sacrifica frente a PostgreSQL.
+- **Marketing puede ver un carrito que ya se compró**, durante los segundos que tarda en propagarse el cambio al índice. Por eso la verificación antes del cupón usa lectura fuerte, que cuesta el doble que la eventual [8].
+- **Todos los carritos de un día comparten partición en el índice.** Con el volumen de TiendaCol no es un problema, pero a mayor escala habría que repartir esa clave, por ejemplo agregándole la hora.
+- **El equipo tiene que aprender a diseñar claves en DynamoDB**, en las tres semanas antes de S16.
 
 ## ADR-5. Orquestación
 
@@ -335,19 +345,46 @@ Preguntas que deben poder responder:
   5. ¿Cómo se reprocesan días pasados (backfill)?
 -->
 
-**Contexto.** `[...]`
+**Contexto.** El RF-12 exige ejecutar automáticamente los procesos programados en el orden de sus dependencias y, si un paso falla, no ejecutar los que dependen de él y notificar la falla. TiendaCol mezcla dos ritmos: procesos que arrancan y terminan (la carga diaria del catálogo y los maestros antes de las 6:00 a. m. del RF-04, y el paso Bronze → Silver → Gold cada hora para cumplir la frescura de 1 hora de los RF-10 y RF-11) y jobs de streaming que corren sin parar (RF-07, RF-08 y RF-09). Un paso que corre con datos incompletos produce cifras equivocadas sin que nadie lo note: si falla la carga del catálogo, el enriquecimiento del RF-06 pegaría a cada venta la categoría del día anterior. Además, cada paso se puede reintentar, y la guía exige que el pipeline completo esté orquestado. Por el ADR-6, el orquestador corre en un contenedor sobre la misma EC2 que el broker, Spark y el componente libre.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Airflow | `[...]` | `[...]` |
-| Dagster | `[...]` | `[...]` |
-| Prefect | `[...]` | `[...]` |
+| Airflow | Es la referencia del curso (S11). Cumple el RF-12 por defecto: si un paso falla, los que dependen de él quedan marcados como `upstream_failed` y no corren. Cada ejecución sabe qué intervalo de tiempo procesa, así que el backfill es nativo. Tiene sensores para esperar datos en S3 y avisos cuando un paso falla. | Es el más pesado de los tres: su `docker-compose` oficial trae 8 servicios y la documentación pide al menos 4 GB de memoria, idealmente 8 GB [7], en una EC2 que comparte con el resto del pipeline. |
+| Dagster | Modela el pipeline como activos de datos (las tablas Bronze, Silver y Gold) y muestra su linaje, lo que ayuda al requisito de trazabilidad. Backfill nativo por particiones. Más liviano que Airflow. | No se ve en el curso: el equipo aprendería una herramienta nueva sin material de apoyo, en las tres semanas antes de S16. |
+| Prefect | El más liviano: los flujos son funciones de Python. | No tiene un concepto propio de intervalo de datos, así que el backfill se arma a mano pasando la fecha como parámetro. Tampoco se ve en el curso. |
 
-**Decisión.** `[herramienta + cómo se modelan las dependencias del DAG]`
+**Decisión.** Se elige Airflow, con el `LocalExecutor` en lugar del `CeleryExecutor` del compose oficial: los pasos corren como procesos en el mismo contenedor del scheduler, lo que elimina Redis y el worker aparte y baja el consumo de memoria en la EC2. Las dependencias se modelan en tres DAG:
 
-**Consecuencias.** `[...]`
+```
+dag_diario   (5:00 a. m., hora de Colombia)
+  cargar_catalogo ──┐
+                    ├──► maestros_a_silver
+  cargar_maestros ──┘
+
+dag_horario  (cada hora)
+  esperar_bronze ──► bronze_a_silver ──► enriquecer ──┬──► gold_embudo  (RF-10)
+  (sensor en S3)       (RF-05)           (RF-06)      └──► gold_ventas  (RF-11)
+                                  esperar_catalogo ──┘
+                                  (catálogo del día cargado)
+
+dag_streaming  (cada 5 minutos)
+  verificar_jobs ──► reiniciar_si_caido ──► notificar
+  (RF-07, RF-08, RF-09)
+```
+
+El orquestador no ejecuta el streaming, porque un job que nunca termina no cabe en una tarea que empieza y termina: lo supervisa. `dag_streaming` revisa que cada job siga vivo y avanzando, lo arranca solo si no está corriendo y avisa si tuvo que reiniciarlo. La recuperación dentro del job la hacen sus checkpoints (ADR-2). En `dag_horario`, `esperar_bronze` es un sensor que no deja avanzar hasta que el streaming haya escrito en Bronze la hora completa, y `enriquecer` también espera a que el catálogo del día esté cargado. Cada paso se reintenta ante fallas pasajeras y, si falla del todo, los que dependen de él no corren y un aviso de falla notifica al equipo, como pide el RF-12. Todos los pasos son idempotentes: en lugar de agregar filas, cada uno sobrescribe la partición de su intervalo o hace un MERGE, según el formato del ADR-3. Así, un reintento o un backfill deja el mismo resultado que una sola ejecución. La zona horaria se configura explícitamente, porque Airflow programa en UTC por defecto y el RF-04 está en hora de Colombia.
+
+<!-- PENDIENTE (P4 y equipo): la herramienta la eligió P4 aceptando la recomendación del agente, sin discusión del equipo todavía. Validar con P1, P2 y P3. Confirmar también la hora del dag_diario (5:00 a. m.) y la frecuencia de dag_streaming (5 min). -->
+
+**Consecuencias.**
+
+- **Airflow consume memoria que el resto del pipeline no puede usar.** Aun con el `LocalExecutor`, la EC2 tiene que ser más grande y cuesta más por hora. Este costo se suma al tamaño de instancia pendiente del ADR-6.
+- **Mientras la EC2 está apagada, no corre ningún DAG.** Con el temporizador del Learner Lab, la carga de las 5:00 a. m. no se ejecuta si el laboratorio está cerrado. Al encenderlo, los intervalos pendientes se recuperan con backfill, algo que solo es seguro porque los pasos son idempotentes.
+- **La supervisión del streaming tiene un retraso.** Si un job se cae justo después de una revisión, pasan hasta 5 minutos antes de reiniciarlo. En ese tiempo el RF-07 no cumple su máximo de 2 minutos.
+- **El `LocalExecutor` no reparte trabajo entre máquinas.** Si el pipeline creciera hacia los 5.000 eventos por segundo del Anexo A, habría que volver al `CeleryExecutor` o a un despliegue con varios workers.
+- **Se renuncia al linaje de tablas de Dagster.** El linaje de Bronze a Gold tendrá que documentarse aparte para el requisito de trazabilidad.
 
 ## ADR-6. Plataforma (opcional)
 
@@ -361,19 +398,31 @@ Preguntas que deben poder responder:
   4. ¿Qué condiciona en los otros ADRs?
 -->
 
-**Contexto.** `[...]`
+**Contexto.** El pipeline de TiendaCol necesita correr al mismo tiempo cinco piezas: un broker de streaming, un motor de procesamiento con Spark, el almacenamiento Bronze/Silver/Gold en formato de tabla abierta, un orquestador y el componente libre. La plataforma debe cumplir tres condiciones del proyecto: el E2 exige un `docker-compose.yml` que levante el pipeline desde cero siguiendo el README, la demo de S16 corre en vivo frente al docente, y cualquier integrante debe poder reproducir el entorno. El equipo cuenta con una cuenta de AWS Academy Learner Lab, que impone límites propios: un presupuesto fijo de USD 50 que, si se agota, desactiva la cuenta y borra todo el trabajo; sesiones con temporizador que apagan las instancias al terminar, mientras otros servicios siguen cobrando fuera de la sesión; la imposibilidad de crear roles IAM, de modo que solo se usan los que trae el laboratorio; y una única región, `us-east-1`. Por último, el sistema está dimensionado para 5.000 eventos por segundo (Anexo A), pero la demo procesa un volumen mucho menor: la plataforma debe poder crecer hasta esa capacidad sin que el equipo pague hoy por ella.
+
+<!-- PENDIENTE (P4): confirmar en el Learner Lab que el presupuesto real es USD 50. -->
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| AWS | `[...]` | `[...]` |
-| GCP | `[...]` | `[...]` |
-| Local con Docker | `[...]` | `[...]` |
+| AWS todo administrado (Kinesis o MSK, EMR, MWAA) | El equipo no instala ni opera servidores: AWS administra el broker, el procesamiento y el orquestador, y los escala solo. | MSK, EMR y MWAA cobran por cada hora encendidos, aunque no procesen nada. Según el material del curso (Clase 6), un clúster EMR encendido 48 horas cuesta cerca de USD 14: con USD 50 y una cuenta que se borra al agotarlos, un servicio olvidado pone en riesgo todo el proyecto. Además, estos servicios no se pueden levantar con un `docker-compose.yml`, que es lo que exige el E2. |
+| AWS híbrido: contenedores en EC2 + lakehouse en S3 | El cómputo (broker, Spark y orquestador) corre en contenedores sobre una EC2, que deja de cobrar cuando se apaga. El almacenamiento (Bronze, Silver y Gold en S3, en el formato de tabla abierta que elija el ADR-3) cobra por uso y sobrevive si la EC2 falla. El mismo `docker-compose.yml` corre en un portátil y en la nube. Reutiliza lo hecho en el Lab 1b: tablas Delta Lake en S3 consultadas con Athena. | La EC2 es un punto único de falla del cómputo: si se cae, el streaming se detiene hasta que se levante otra. El equipo administra las versiones y la configuración de cada contenedor. Los contenedores necesitan permiso para escribir en S3 sin claves que caduquen a mitad de la demo. |
+| Local con Docker | No cuesta nada, no tiene temporizador de sesión y la demo no depende de la red del salón. | Las cinco piezas tienen que caber a la vez en el portátil de la demo, y cada integrante tiene una máquina distinta. Los datos quedan en un disco local y no en almacenamiento de objetos, que es la base del lakehouse que enseña el curso. No hay forma de crecer hacia los 5.000 eventos por segundo del Anexo A. |
+| GCP | Tiene servicios equivalentes para cada capa (Pub/Sub, Dataproc, Cloud Composer, BigQuery) y un programa de créditos educativos. | El equipo ya tiene AWS Academy activo y todos los laboratorios del curso se hicieron en AWS, así que cambiar de nube suma aprendizaje sin resolver ningún requisito. Dataproc y Cloud Composer también cobran por hora encendidos, así que el problema de presupuesto de la primera alternativa se repite. |
 
-**Decisión.** `[...]`
+**Decisión.** Se elige el enfoque híbrido en AWS Academy, con una regla de costo: un servicio se usa administrado solo si cobra por uso; si cobraría por hora encendido, corre en un contenedor. Por eso el broker, Spark y el orquestador corren con `docker-compose` sobre una instancia EC2, y Bronze, Silver y Gold viven en S3 en formato de tabla abierta. La decisión se apoya en la separación de cómputo y almacenamiento: el cómputo es reemplazable (si la EC2 falla, se levanta otra con el mismo `docker-compose.yml`) y los datos persisten en S3, que cobra por GB guardado y escala sin que el equipo lo administre. El mismo archivo levanta el pipeline en el portátil de cualquier integrante y en la nube, lo que cumple el requisito de reproducibilidad del E2. Los contenedores acceden a S3 con el rol de instancia que provee el laboratorio, y no con claves copiadas a mano, que caducan con cada sesión.
 
-**Consecuencias.** `[...]`
+<!-- PENDIENTE (P4): confirmar en la consola del Learner Lab que se puede asociar un rol de instancia (instance profile) a una EC2, y definir el tamaño de la instancia cuando el equipo sepa qué contenedores corren. -->
+
+**Consecuencias.**
+
+- **La EC2 es un punto único de falla del cómputo.** Si se cae, el streaming y el orquestador se detienen hasta levantar otra instancia. Los datos no se pierden, porque están en S3.
+- **El equipo opera los contenedores.** Nadie administra por ellos las versiones del broker, de Spark y del formato de tabla, y esas versiones tienen que ser compatibles entre sí. Este riesgo pasa a la Sección 5.
+- **El pipeline no corre de forma continua.** El temporizador del Learner Lab apaga la EC2 al terminar cada sesión. Para la demo hay que iniciar el laboratorio con anticipación, y el procesamiento tiene que poder reanudarse desde donde quedó (checkpoints, ADR-2).
+- **Una sola EC2 no alcanza los 5.000 eventos por segundo del Anexo A.** Llegar a ese volumen exigiría repartir el cómputo en varias máquinas o pasarlo a servicios administrados. El almacenamiento en S3 no tendría que cambiar.
+- **El disco de la EC2 sigue cobrando con la instancia apagada**, aunque su costo es bajo frente al de un servicio encendido.
+- **Condiciona los otros ADRs.** Descarta los servicios que cobran por hora encendidos: Kinesis para el ADR-1, MWAA para el ADR-5, y bases administradas como RDS o DocumentDB para el ADR-4. Deja abiertos los que corren en contenedores o cobran por uso, como Athena o DynamoDB en modo bajo demanda, si el laboratorio los permite.
 
 # 5. Plan de implementación
 
@@ -392,27 +441,36 @@ Riesgos candidatos (evaluar cuáles aplican):
 
 ## 5.1 Responsabilidades
 
+Cada integrante implementa en el E2 los componentes de la sección del E1 que escribió. Cada RF tiene un responsable, salvo el RF-08, que se reparte: P2 detecta los carritos abandonados en el streaming y P4 los publica en DynamoDB.
+
 | Integrante | Componente(s) que implementa | RF que cubre |
 |---|---|---|
-| `[P1]` | `[...]` | `[...]` |
-| `[P2]` | `[...]` | `[...]` |
-| `[P3]` | `[...]` | `[...]` |
-| `[P4]` | `[...]` | `[...]` |
+| **P1** · Juan Simón Ospina Martínez | Generador de eventos que simula las fuentes (clickstream, órdenes, stock, catálogo), carga diaria del catálogo y los maestros, y las pruebas de la columna "Cómo se verifica" de la Sección 2.1 | RF-04 · pruebas de todos los RF |
+| **P2** · `[nombre]` | Kafka, ingesta de las fuentes a Bronze y los jobs de streaming con Spark | RF-01, RF-02, RF-03, RF-07, RF-08, RF-09 |
+| **P3** · `[nombre]` | Bronze → Silver → Gold con Spark, modelo dimensional de Gold y consultas de consumo | RF-05, RF-06, RF-10, RF-11 · RF-13 si hay tiempo |
+| **P4** · Juan José Díaz Rodríguez | `docker-compose.yml`, EC2 y S3, los tres DAG de Airflow, la tabla de DynamoDB, README, bitácora de IA y PR | RF-12 · publicación del RF-08 |
+
+<!-- PENDIENTE (equipo): nombres de P2 y P3. Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
 
 ## 5.2 Cronograma hasta S16
 
 | Semana | Hito | Responsable(s) | Criterio de "terminado" |
 |---|---|---|---|
-| S13 | `[...]` | `[...]` | `[...]` |
-| S14 | `[...]` | `[...]` | `[...]` |
-| S15 | `[...]` | `[...]` | `[...]` |
+| S13 | Esqueleto de punta a punta: `docker-compose.yml` mínimo con Kafka, Spark y Airflow sobre la EC2, versiones fijadas, tabla de DynamoDB creada. Ajuste de los ADR con la retroalimentación del E1 | P4 (plataforma), P2 (Kafka), P1 (generador) | Un evento del generador llega a Bronze en S3. `docker compose up` levanta sin errores. La memoria usada por la EC2 queda medida y anotada |
+| S14 | Streaming y Silver: jobs de RF-07, RF-08 y RF-09; validación, cuarentena y deduplicación; enriquecimiento; `dag_diario` y `dag_horario` corriendo | P2, P3, P4 | Pasan las pruebas de RF-05, RF-06, RF-07, RF-08 y RF-09 de la Sección 2.1 |
+| S15 | Gold y consumo: modelo dimensional, consultas de P4 y P5, `dag_streaming`, README, bitácora y borrador de slides. Explicación cruzada de componentes | Todos | Un integrante que no escribió el código levanta el pipeline desde cero siguiendo el README. Pasan todas las pruebas de la Sección 2.1 |
 | S16 | Presentación, demo en vivo y defensa | Todos | PR final abierto y demo ensayada de principio a fin el día anterior |
 
 ## 5.3 Riesgos técnicos y mitigación
 
 | Riesgo | Probabilidad | Impacto | Mitigación |
 |---|---|---|---|
-| `[...]` | `[alta / media / baja]` | `[alto / medio / bajo]` | `[...]` |
+| Se agota el presupuesto de AWS Academy y se borra la cuenta (ADR-6) | Media | Alto | Terminar el laboratorio al cerrar cada sesión y no usar servicios que cobren por hora. P4 revisa el gasto cada semana. El código vive en git, no solo en la EC2. |
+| La EC2 no aguanta a la vez Kafka, Spark y Airflow (ADR-5, ADR-6) | Media | Alto | Medir la memoria con el compose mínimo en S13 antes de elegir el tamaño de la instancia. Airflow con `LocalExecutor` y límite de memoria por contenedor. |
+| Versiones incompatibles entre Spark, el conector de Kafka y el formato de tabla (ADR-1 a ADR-3) | Media | Alto | Fijar las versiones exactas en el compose desde S13 y probar un camino mínimo de punta a punta antes de construir lo demás. |
+| El Learner Lab no permite crear tablas en DynamoDB (ADR-4) | Baja | Medio | Confirmarlo antes del E1 creando y borrando una tabla de prueba. Plan B: MongoDB en contenedor. |
+| Falla la demo en vivo por la red, la sesión del laboratorio o las credenciales | Media | Alto | Ensayo completo el día anterior, iniciar el laboratorio con anticipación y tener un dataset precargado. Plan B: correr el mismo compose en un portátil (ADR-6). |
+| Un integrante no sabe defender una parte que no implementó | Media | Alto | En S15, cada integrante le explica su componente a otro y el equipo hace un simulacro con las preguntas típicas de la guía. |
 
 <div style="page-break-after: always;"></div>
 
@@ -446,8 +504,11 @@ Como control de realismo: las ventas anuales de TiendaCol (≈ COP 194.000 millo
 4. SGB Media, sobre la encuesta de AlixPartners (2024). *Study: Out-of-Stocks Drive 66 Percent of Consumers to Another Retailer*. https://sgbonline.com/study-out-of-stocks-drive-66-percent-of-consumers-to-another-retailer/
 5. Rejoiner. *When Is the Best Time to Send an Abandoned Cart Email?* (fuente de la industria). https://www.rejoiner.com/resources/abandoned-cart-email-timing
 6. Cámara Colombiana de Comercio Electrónico (CCCE). *Llega una nueva versión de Hot Sale en Colombia* (2025). https://ccce.org.co/noticias/llega-una-nueva-version-de-hotsale-en-colombia/
+7. Apache Software Foundation. *Running Airflow in Docker*, documentación de Apache Airflow 3.3.2 (consultada el 29 de septiembre de 2026). https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html
+8. Amazon Web Services. *DynamoDB read consistency*, Amazon DynamoDB Developer Guide (consultada el 29 de septiembre de 2026). https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.ReadConsistency.html
 
 <!-- P2, P3 y P4: agregar aquí sus referencias, desde la [7]. -->
+<!-- P4 usó la [7] y la [8]. La siguiente disponible es la [9]. -->
 
 <!--
 ====================================================================
