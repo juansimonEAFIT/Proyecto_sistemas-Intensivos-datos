@@ -48,7 +48,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propues
 | Nombre completo | Código EAFIT |
 |---|---|
 | `Juan Simón Ospina Martínez` | `1000341990` |
-| `[Nombre completo P2]` | `[código]` |
+| `Sebastián Durán` | `1000315087` |
 | `Daniel Arcila Salazar` | `1000331599` |
 | `[Nombre completo P4]` | `[código]` |
 
@@ -512,11 +512,11 @@ Cada integrante implementa en el E2 los componentes de la sección del E1 que es
 | Integrante | Componente(s) que implementa | RF que cubre |
 |---|---|---|
 | **P1** · Juan Simón Ospina Martínez | Generador de eventos que simula las fuentes (clickstream, órdenes, stock, catálogo), carga diaria del catálogo y los maestros, y las pruebas de la columna "Cómo se verifica" de la Sección 2.1 | RF-04 · pruebas de todos los RF |
-| **P2** · `[nombre]` | Kafka, ingesta de las fuentes a Bronze y los jobs de streaming con Spark | RF-01, RF-02, RF-03, RF-07, RF-08, RF-09 |
+| **P2** · Sebastián Durán | Kafka, ingesta de las fuentes a Bronze y los jobs de streaming con Spark | RF-01, RF-02, RF-03, RF-07, RF-08, RF-09 |
 | **P3** · Daniel Arcila Salazar | Bronze → Silver → Gold con Spark, modelo dimensional de Gold y consultas de consumo | RF-05, RF-06, RF-10, RF-11 · RF-13 si hay tiempo |
 | **P4** · Juan José Díaz Rodríguez | `docker-compose.yml`, EC2 y S3, los tres DAG de Airflow, la tabla de DynamoDB, README, bitácora de IA y PR | RF-12 · publicación del RF-08 |
 
-<!-- PENDIENTE (equipo): nombre de P2. Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
+<!-- PENDIENTE (equipo): Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
 
 ## 5.2 Cronograma hasta S16
 

@@ -107,15 +107,15 @@ Archivo: [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md).
 
 | Sección | Responsable | Estado |
 |---|---|---|
-| Portada | Integrante P1 | Escrita. Faltan nombre y código de los integrantes P2 y P4, y la fecha de entrega. |
+| Portada | Integrante P1 | Escrita. Faltan nombre y código del integrante P4, y la fecha de entrega. |
 | 1. Definición del problema | Integrante P1 | Escrita, lista para revisión. |
 | 2.1 Requisitos funcionales (RF-01 a RF-13) | Integrante P1 | Escrita, lista para revisión. |
-| 2.2 Requisitos no funcionales | Integrante P2 | Solo estructura (tabla RNF-01 a RNF-06 con `[...]`). |
+| 2.2 Requisitos no funcionales | Integrante P2 | Escrita (2026-09-30). Falta el tiempo máximo de recuperación de la EC2 (RNF-05) con P4. |
 | 3. Diagrama | Integrante P3 | Escrito y exportado a Draw.io y SVG. Falta publicar el enlace editable. |
-| 4. ADR-1 y ADR-2 | Integrante P2 | Solo estructura. |
+| 4. ADR-1 y ADR-2 | Integrante P2 | Escritos (2026-09-30). Falta validar con el equipo el diseño de topics, los valores de trigger y watermark, y el canal del RF-09. |
 | 4. ADR-3 | Integrante P3 | Escrito: Delta Lake en S3 y modelo estrella con hechos de ventas y embudo. |
 | 4. ADR-4, ADR-5 y ADR-6 | Integrante P4 | Escritos el 2026-09-29, con pendientes de validación marcados como `<!-- PENDIENTE -->`. |
-| 5. Plan de implementación | Integrante P4 | Escrito el 2026-09-29. Falta el nombre de P2 y validar el reparto del E2. |
+| 5. Plan de implementación | Integrante P4 | Escrito el 2026-09-29. Falta validar el reparto del E2. |
 | Anexo A. Supuestos de dimensionamiento | Integrante P1 | Escrito. |
 | Referencias | Todos | [1] a [6] escritas por el integrante P1. Los demás agregan desde la [7]. |
 
@@ -224,7 +224,7 @@ Texto completo en la Sección 2.1. Los RF dicen **qué** hace el sistema, **no c
 | Integrante | Nombre | Rol | Escribe en `e1_tiendacol.md` |
 |---|---|---|---|
 | **P1** | Juan Simón Ospina Martínez (código 1000341990) | Negocio y requisitos funcionales | Portada, Sección 1, Sección 2.1, Anexo A |
-| **P2** | _(por definir)_ | Calidad y streaming | Sección 2.2 (RNF), ADR-1, ADR-2 |
+| **P2** | Sebastián Durán (código 1000315087) | Calidad y streaming | Sección 2.2 (RNF), ADR-1, ADR-2 |
 | **P3** | Daniel Arcila Salazar (código 1000331599) | Arquitectura | Sección 3 (diagrama + tabla de capas), ADR-3 |
 | **P4** | Juan José Díaz Rodríguez | Componentes y plan | ADR-4, ADR-5, ADR-6 (opcional), Sección 5, repo y PR |
 
@@ -238,8 +238,8 @@ Al final hay **revisión cruzada** (P1 → P2, P2 → P3, P3 → P4, P4 → P1) 
 
 | ADR | Decisión | Opciones a evaluar | Conceptos del curso a citar | Responsable | Estado |
 |---|---|---|---|---|---|
-| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | **Decidido por el equipo (2026-09-29): Kafka con at-least-once.** Falta redactarlo. Kinesis queda descartado por el ADR-6 (cobra por shard-hora) |
-| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | **Decidido por el equipo (2026-09-29): Spark.** Falta redactarlo. Ojo: con at-least-once, los jobs de RF-07 a RF-09 leen de Kafka antes de Silver y también tienen que eliminar duplicados por identificador de evento |
+| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | **Decidido por el equipo (2026-09-29): Kafka con at-least-once.** Escrito (2026-09-30); topics, claves, particiones y retención pendientes de validar. Kinesis queda descartado por el ADR-6 (cobra por shard-hora) |
+| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | **Decidido por el equipo (2026-09-29): Spark.** Escrito (2026-09-30); Silver lo produce solo el batch horario. Ojo: con at-least-once, los jobs de RF-07 a RF-09 leen de Kafka antes de Silver y también tienen que eliminar duplicados por identificador de evento |
 | ADR-3 | Formato de Gold y modelo dimensional | Delta Lake, Iceberg | star schema, grano, ACID, schema evolution | Integrante P3 | **Decidido por el equipo (2026-09-30): Delta Lake en S3**, con `fact_sales`, `fact_funnel_event` y dimensiones conformadas |
 | ADR-4 | Componente libre y su posición CAP | MongoDB, Cassandra, DynamoDB, Redis, Neo4j, Trino/Athena… | CAP (CP vs AP), sharding, partition key | Integrante P4 | **Escrito (2026-09-29): DynamoDB bajo demanda para el RF-08, AP, partition key `user_id`.** Falta confirmar que el Learner Lab permita crear tablas; plan B, MongoDB |
 | ADR-5 | Orquestación y dependencias del DAG | Airflow, Dagster, Prefect | DAG, dependencias, reintentos, idempotencia | Integrante P4 | **Escrito (2026-09-29): Airflow con `LocalExecutor`, tres DAG.** Falta validarlo con el equipo |
@@ -304,7 +304,7 @@ No son parte del E1: allí la "Fuente" del diagrama son los sistemas de TiendaCo
 Si falta alguno de estos datos, **preguntarle al humano** o dejar el marcador `[...]` con un comentario `<!-- PENDIENTE: ... -->`. Nunca llenarlo con algo que "suena plausible".
 
 - **La herramienta elegida en cualquier ADR.** El agente puede explicar y comparar opciones, pero la "Decisión" la escribe a partir de lo que el humano diga que el equipo eligió y por qué.
-- Nombres y códigos de los integrantes P2 y P4. Fechas exactas de S13 y S16.
+- Nombre y código del integrante P4. Fechas exactas de S13 y S16.
 - Cifras de mercado o estadísticas sin una fuente real y verificable con URL. Toda cifra externa va con su referencia numerada.
 - Valores de negocio distintos a los de §4.
 - Enlaces: la URL editable del diagrama y cualquier URL no verificada.
