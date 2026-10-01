@@ -209,38 +209,35 @@ Preguntas que deben poder responder:
   6. ¿Está atado a una plataforma (ADR-6)?
 -->
 
-**Contexto.** Los RF-01, RF-07, RF-08 y RF-09 exigen procesar el clickstream en tiempo real, y el enunciado prohíbe simular el streaming con batch. El tráfico pasa de ≈ 29 eventos/s en un día normal a ≈ 3.000 en la apertura de ofertas de Black Friday, con una capacidad objetivo de 5.000 eventos/s (Anexo A), unos 5 MB/s a 1 KB por evento. Hace falta un transporte que amortigüe esos picos entre la fuente y el procesamiento, que conserve los eventos para poder reprocesarlos tras una falla y que reparta el trabajo en paralelo. Además, la app reenvía eventos cuando pierde conexión, así que los duplicados nacen en la fuente (RF-05). Por el ADR-6, el transporte corre en un contenedor de la misma EC2 que Spark y Airflow, y se descartan los servicios que cobran por hora encendidos.
+**Contexto.** Los RF-01, RF-07, RF-08 y RF-09 exigen tiempo real, y el enunciado prohíbe simularlo con batch. El tráfico pasa de ≈ 29 eventos/s a ≈ 3.000 en la apertura de ofertas, con una capacidad objetivo de 5.000 eventos/s (Anexo A). Hace falta un transporte que amortigüe los picos, conserve los eventos para reprocesarlos y reparta el trabajo en paralelo. La app reenvía eventos al perder conexión, así que los duplicados nacen en la fuente (RF-05). Por el ADR-6, el transporte corre en un contenedor de la EC2 compartida y se descartan los servicios que cobran por hora encendidos.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Kafka | Es la referencia que cita la guía del curso (S6-S7). Corre en un contenedor del `docker-compose.yml` y no cobra por hora. Las particiones reparten la carga y conservan el orden dentro de cada una. La retención permite releer eventos (*replay*). Se integra con Spark Structured Streaming, que guarda los *offsets* leídos en su *checkpoint*. | Hay que operarlo: versiones compatibles con Spark y memoria de la EC2. Con un solo broker no hay réplicas. |
-| Kinesis | Gestionado: AWS lo opera y lo escala por *shards*. | Cobra por *shard*-hora encendido, y con USD 50 de presupuesto un recurso olvidado pone en riesgo la cuenta (ADR-6). No corre en un `docker-compose.yml`, que exige el E2, y solo existe en AWS. |
-| Redpanda | Compatible con la API de Kafka y más liviano en memoria. | La guía no lo cita y el equipo no lo ha usado. Su ahorro de memoria no compensa aprender otra herramienta en las tres semanas antes de S16, cuando Kafka ya cubre el requisito. |
+| Kafka | Referencia de la guía del curso (S6-S7). Corre en el `docker-compose.yml` sin cobrar por hora. Particiones con orden por clave, retención para *replay* e integración con Spark, que guarda los *offsets* en su *checkpoint*. | Hay que operarlo y consume memoria de la EC2. Un solo broker no tiene réplicas. |
+| Kinesis | Gestionado: AWS lo opera y lo escala por *shards*. | Cobra por *shard*-hora encendido: con USD 50 de presupuesto, un recurso olvidado pone en riesgo la cuenta (ADR-6). No corre en un `docker-compose.yml`, que exige el E2. |
+| Redpanda | Compatible con la API de Kafka y más liviano. | La guía no lo cita y el equipo no lo ha usado: su ahorro no compensa aprender otra herramienta antes de S16. |
 
-**Decisión.** Se elige **Apache Kafka** en un contenedor de la EC2, con garantía ***at-least-once***. Las dos garantías descartadas fallan en este problema. *At-most-once* puede perder eventos: perder un `add_to_cart` esconde un carrito del RF-08 y no se puede recuperar. Un duplicado, en cambio, se elimina por `event_id`, así que para este problema duplicar es menos grave que perder. *Exactly-once* de extremo a extremo exigiría además un destino transaccional en cada salida [12][13]; el equipo lo logra solo donde importa, en Delta Lake con `MERGE` (ADR-3). El resultado es at-least-once con deduplicación, que tiene el mismo efecto en Gold.
-
-La garantía se configura en tres puntos. El productor usa `acks=all` e idempotencia, lo que evita duplicados por sus propios reintentos hacia Kafka [12]. Spark guarda en su *checkpoint* los *offsets* leídos y los avanza después de escribir en el destino: si el job cae a mitad de un lote, relee ese lote y lo procesa otra vez [13]. Los duplicados de la fuente, más los de esa relectura, se eliminan por `event_id` en los jobs de streaming (ADR-2) y en Silver (RF-05).
+**Decisión.** Se elige **Apache Kafka** en un contenedor de la EC2, con garantía ***at-least-once***. *At-most-once* puede perder un `add_to_cart` y esconder un carrito del RF-08, algo que no se recupera; un duplicado, en cambio, se elimina por `event_id`. *Exactly-once* de extremo a extremo exigiría un destino transaccional en cada salida [12][13]; aquí se logra el mismo efecto solo donde importa, en Delta Lake con `MERGE` (ADR-3). Se configura así: el productor usa `acks=all` e idempotencia, que evita duplicados por sus propios reintentos [12]; Spark avanza los *offsets* de su *checkpoint* después de escribir, así que tras una falla relee el último lote [13]; y los duplicados de la fuente y de esa relectura se eliminan por `event_id` en los jobs de streaming (ADR-2) y en Silver (RF-05).
 
 Diseño de los topics `[propuesta de P2, pendiente de validar con el equipo]`:
 
 | Topic | Clave de partición | Particiones | Por qué |
 |---|---|---|---|
-| `clickstream` | `user_id` (`session_id` si el usuario es anónimo) | 6 | El orden solo se garantiza dentro de una partición [12]: con esta clave, los eventos de un mismo usuario llegan en orden, lo que necesita el RF-08 para saber si hubo compra después del carrito. Reparte la carga de forma pareja. Seis particiones dejan unos 830 ev/s por partición a 5.000 ev/s, permiten hasta seis tareas de Spark en paralelo y no gastan la memoria de la EC2. |
-| `orders` | `order_id` | 3 | Volumen bajo (24.000 órdenes en un día de Black Friday). Con `product_id` como clave, un producto en tendencia saturaría una sola partición (partición caliente). |
-| `stock_changes` | `product_id` | 3 | El último cambio de stock de cada producto debe procesarse en orden (RF-03). |
+| `clickstream` | `user_id` (`session_id` si es anónimo) | 6 | El orden solo existe dentro de una partición [12]: así los eventos de un usuario llegan en orden, lo que necesita el RF-08 para saber si hubo compra tras el carrito. A 5.000 ev/s son ≈ 830 ev/s por partición, con hasta seis tareas de Spark en paralelo. |
+| `orders` | `order_id` | 3 | Volumen bajo (24.000 órdenes en Black Friday). Con `product_id` como clave, un producto en tendencia saturaría una partición. |
+| `stock_changes` | `product_id` | 3 | Los cambios de stock de un producto deben procesarse en orden (RF-03). |
 
-El RF-07 agrupa por producto, pero no se usa `product_id` como clave del clickstream: Spark reagrupa por producto al calcular la ventana, y así se evita la partición caliente. La retención es de **7 días**, suficiente para reprocesar tras un fin de semana con el laboratorio apagado por su temporizador (ADR-6).
+La retención es de **7 días**, para reprocesar tras un fin de semana con el laboratorio apagado por su temporizador (ADR-6). El RF-07 agrupa por producto, pero Spark reagrupa al calcular la ventana, y así se evita la partición caliente.
 
 **Consecuencias.**
 
-- **Los duplicados llegan a los consumidores.** Todo job de streaming tiene que deduplicar por `event_id`, lo que cuesta memoria para guardar los identificadores recientes y algo de latencia.
-- **Un solo broker significa sin réplicas.** Si se cae o pierde su disco, el flujo se detiene y los eventos aún no leídos pueden perderse. `acks=all` no añade durabilidad sin una segunda réplica. En un despliegue real serían tres brokers con factor de replicación 3 y `min.insync.replicas=2`.
-- **El orden solo existe por usuario.** No hay orden global entre usuarios, y cualquier cálculo por producto implica que Spark reparta los datos de nuevo entre tareas.
-- **Las particiones no se reducen, y aumentarlas cambia a qué partición va cada clave**, lo que rompe el orden de los eventos ya guardados. Por eso se fija el número desde ahora con margen.
-- **La retención ocupa disco.** Siete días son unos 18 GB en un día normal (2,5 millones de eventos a 1 KB, unos 2,5 GB por día) pero unos 170 GB con el tráfico de Black Friday. El tamaño del disco de la EC2 queda pendiente en el ADR-6.
-- **Kafka consume memoria de la EC2** que comparte con Spark y Airflow, y su versión debe ser compatible con el conector de Spark (riesgo de la Sección 5).
+- **Los duplicados llegan a los consumidores:** todo job deduplica por `event_id`, a costa de memoria y algo de latencia.
+- **Un solo broker no tiene réplicas.** Si cae o pierde su disco, el flujo se detiene y pueden perderse eventos no leídos. En producción serían 3 brokers, factor de replicación 3 y `min.insync.replicas=2`.
+- **El orden existe solo por usuario:** un cálculo por producto obliga a Spark a reagrupar los datos.
+- **Las particiones no se reducen, y aumentarlas cambia a qué partición va cada clave:** por eso se fijan desde ahora con margen.
+- **Costo de recursos.** La retención ocupa ≈ 18 GB en un día normal y ≈ 170 GB en Black Friday (disco pendiente en el ADR-6). Kafka comparte memoria con Spark y Airflow, y su versión debe ser compatible con el conector de Spark (riesgo de la Sección 5).
 
 <!-- PENDIENTE (P2 y equipo): el diseño de topics, claves, particiones (6/3/3) y la retención de 7 días los propuso P2 con el agente; falta validarlos con el equipo. Confirmar con P1 (generador) que el evento trae `user_id` o `session_id`, y con P4 el disco de la EC2. -->
 
@@ -265,36 +262,34 @@ Preguntas que deben poder responder:
   7. Batch puro no sirve para el tiempo real (lo prohíbe el enunciado): expliquen por qué se descarta y si sirve en otra parte del pipeline.
 -->
 
-**Contexto.** Los RF-07, RF-08 y RF-09 necesitan cálculos sobre ventanas de tiempo con latencias de minutos: la velocidad de venta de los últimos 15 minutos, recalculada cada minuto (RF-07), el carrito sin actividad durante 30 minutos (RF-08) y las ventas por minuto (RF-09). Los tres exigen resultados en máximo 2 minutos, salvo el RF-08, que tiene 5 minutos después de cumplidos los 30. El RF-06 pide un *join* con el catálogo y los maestros, y los RF-10 y RF-11 piden agregaciones cada hora sobre muchos datos. El enunciado exige Spark en al menos una transformación no trivial, y prohíbe resolver el tiempo real con batch. Por el ADR-1, los jobs leen de Kafka con garantía *at-least-once*, así que reciben duplicados. Por el ADR-6, todo corre en una EC2 cuya memoria comparten Kafka, Spark y Airflow.
+**Contexto.** Los RF-07 (ventana de 15 min cada minuto), RF-08 (carrito inactivo durante 30 min) y RF-09 (ventas por minuto) necesitan ventanas de tiempo, con resultados en máximo 2 minutos (5 minutos tras los 30 en el RF-08). El RF-06 pide un *join* con el catálogo, y los RF-10 y RF-11, agregaciones horarias. El enunciado exige Spark en una transformación no trivial y prohíbe resolver el tiempo real con batch. Por el ADR-1 los jobs reciben duplicados, y por el ADR-6 comparten la memoria de la EC2.
 
 **Alternativas consideradas.**
 
 | Alternativa | Ventajas para este problema | Desventajas / por qué se descarta |
 |---|---|---|
-| Spark Structured Streaming | Procesa en *micro-batch* (lotes cada pocos segundos), y con una latencia de segundos cumple holgadamente los 2 minutos. Tiene ventanas deslizantes (RF-07), fijas (RF-09) y de sesión (RF-08), *watermarks* para eventos tardíos y *checkpoints* para reanudar [13][14]. El mismo motor sirve para el batch horario de Silver y Gold, y cumple la restricción de usar Spark. La guía del curso lo cita en S4-S5. | Su latencia mínima es la del lote, no la del evento. Los lotes pequeños producen muchos archivos pequeños en Delta Lake. Consume memoria de la EC2. |
-| Flink | Procesa evento por evento, con latencia de milisegundos, y maneja el estado y las sesiones de forma muy natural. | Esa latencia no aporta nada: las decisiones que pide el problema toleran minutos. Además, por el enunciado Spark tendría que aparecer igualmente en Silver y Gold, así que el equipo operaría dos motores a la vez en una EC2 compartida. |
-| Batch puro | Es lo más simple de operar y basta para el RF-05, el RF-06, el RF-10 y el RF-11. | No resuelve los RF-07 a RF-09: un proceso que corre cada cierto tiempo no entrega una alerta en 2 minutos sin volverse un micro-batch, y el enunciado prohíbe simular el streaming con batch. Sí se conserva en el batch horario de Silver y Gold. |
+| Spark Structured Streaming | *Micro-batch* con latencia de segundos, que cumple los 2 min con margen. Ventanas deslizantes (RF-07), fijas (RF-09) y de sesión (RF-08), *watermarks* y *checkpoints* [13][14]. El mismo motor sirve para el batch de Silver y Gold. | La latencia mínima es la del lote, no la del evento. Los lotes pequeños crean archivos pequeños en Delta Lake. |
+| Flink | Procesa evento por evento, con milisegundos, y maneja bien el estado. | Esa latencia no aporta: el problema tolera minutos. Spark tendría que aparecer igual en Silver y Gold, y habría dos motores en una EC2 compartida. |
+| Batch puro | Simple, y suficiente para los RF-05, RF-06, RF-10 y RF-11. | No entrega una alerta en 2 min sin volverse micro-batch, y el enunciado lo prohíbe en tiempo real. Se conserva en el batch horario. |
 
-**Decisión.** Se elige **Spark Structured Streaming** para el tiempo real y **Spark SQL en batch horario** para Silver y Gold, sobre un mismo motor. Un *trigger* de 30 segundos deja cada resultado a unos segundos de su lote y cumple los 2 minutos con margen. La división de trabajo es esta:
+**Decisión.** Se elige **Spark Structured Streaming** para el tiempo real y **Spark SQL en batch horario** para Silver y Gold, con un *trigger* de 30 segundos que cumple los 2 minutos con margen.
 
-- **Streaming (lee de Kafka).** Escribe el dato crudo a Bronze, sin transformarlo, y calcula los RF-07, RF-08 y RF-09. No escribe en Silver: lo hace el batch horario (ADR-5), que también valida, aparta en cuarentena y deduplica por `event_id` (RF-05). Los registros que no cumplen el esquema se ignoran en los cálculos del streaming, pero se conservan en Bronze para que el batch los aparte.
-- **RF-07, ventana deslizante.** Ventana de 15 minutos que se desliza cada minuto, agrupada por producto, sobre las ventas (*join* con el stock actual de cada producto, que el job guarda como estado por clave a partir de `stock_changes`, RF-03). El resultado sale en modo `update`, sin esperar a que cierre la ventana, y publica la alerta por SNS cuando la cobertura baja de 60 minutos.
-- **RF-08, ventana de sesión.** Ventana de sesión con hueco de 30 minutos por usuario. Como la sesión se cierra por inactividad, detecta la ausencia de una compra de esta manera: al cerrarse, si la sesión no contiene ningún `purchase`, tiene un usuario identificado y el valor del carrito es de COP 500.000 o más, se escribe en DynamoDB con `user_id` como clave (ADR-4).
-- **RF-09, ventana fija.** Ventana de 1 minuto con el número de órdenes y el valor en COP, en total y por categoría (*join* con el catálogo). Se escribe en una tabla Gold de métricas por minuto que Superset consulta por Athena. Las métricas que llegan tarde se corrigen cuando el batch horario recalcula Gold desde Silver.
-- **Deduplicación y *watermarks*.** Los jobs eliminan duplicados por `event_id` con un *watermark*, que acota la memoria que ocupan los identificadores ya vistos [14]. *Watermark* de **1 minuto** para el RF-07 y el RF-09, y de **3 minutos** para el RF-08. En modo `append`, el resultado de una ventana sale después de pasar el *watermark* [14]: con 1 minuto más el *trigger* de 30 segundos, el RF-09 sale en unos 1,5 minutos y cumple los 2; con 3 minutos, una sesión del RF-08 sale unos 33,5 minutos después de su último evento y cumple los 35.
-- ***Checkpoints*.** Cada job guarda su *checkpoint* (offsets leídos y estado) en S3, no en el disco de la EC2, para reanudar desde donde quedó aunque se pierda la instancia (ADR-6). Como los *offsets* avanzan después de escribir, una falla a mitad de lote relee ese lote; los duplicados que eso genera los absorbe `MERGE` en Delta (ADR-3) [13].
-- **Recursos.** Los tres jobs y la escritura a Bronze corren como **una sola aplicación de Spark con varias consultas**, para pagar una sola vez la memoria del proceso principal en la EC2.
+- **Streaming (lee de Kafka).** Escribe el dato crudo a Bronze y calcula los RF-07, RF-08 y RF-09. No escribe en Silver: lo hace el batch horario (ADR-5), que valida, aparta en cuarentena y deduplica (RF-05). Los registros que no cumplen el esquema se ignoran en el streaming y quedan en Bronze.
+- **RF-07, ventana deslizante.** 15 min cada minuto por producto, combinada con el stock actual que el job guarda como estado por clave desde `stock_changes` (RF-03). Sale en modo `update` y publica la alerta por SNS si la cobertura baja de 60 min.
+- **RF-08, ventana de sesión.** Hueco de 30 min por usuario. La ausencia de compra se detecta al cerrarse la sesión: si no tiene ningún `purchase`, el usuario está identificado y el carrito vale COP 500.000 o más, se escribe en DynamoDB con `user_id` como clave (ADR-4).
+- **RF-09, ventana fija.** 1 min, con órdenes y COP en total y por categoría (*join* con el catálogo), escrita en una tabla Gold de métricas por minuto que Superset consulta por Athena. El batch horario corrige lo que llegó tarde.
+- **Deduplicación y *watermarks*.** Se deduplica por `event_id` con un *watermark*, que acota la memoria usada [14]: **1 min** para los RF-07 y RF-09 y **3 min** para el RF-08. El resultado de una ventana sale al pasar el *watermark* [14]: el RF-09 sale en ≈ 1,5 min (cumple los 2) y una sesión del RF-08 en ≈ 33,5 min tras su último evento (cumple los 35).
+- ***Checkpoints* en S3,** no en el disco de la EC2, para reanudar aunque se pierda la instancia (ADR-6). Los duplicados de una relectura los absorbe `MERGE` en Delta (ADR-3) [13].
+- **Una sola aplicación de Spark con varias consultas,** para pagar una sola vez la memoria del proceso principal.
 
 **Consecuencias.**
 
-- **La latencia mínima es la del lote (30 s), no la del evento.** Si el problema pidiera respuestas en milisegundos, habría que pasar a Flink.
-- **El *watermark* descarta lo que llega más tarde.** Un evento de la app con más de 1 minuto de retraso no cuenta en las métricas de tiempo real, y un duplicado que llegue después del *watermark* no se elimina en el streaming. Los dos se corrigen en el batch horario, que recalcula desde Bronze, así que las cifras de tiempo real pueden diferir un poco de las de Gold hasta esa hora.
-- **El RF-08 llega justo al límite de 5 minutos:** 3 de *watermark* más 30 segundos de *trigger* dejan poco margen. Hay que medirlo en el E2 y, si no alcanza, bajar el *watermark*, a costa de aceptar menos eventos tardíos.
-- **El *watermark* solo avanza cuando llegan eventos nuevos.** Con poco tráfico (por ejemplo, de madrugada) una ventana puede tardar más en cerrarse y su resultado sale con retraso. En la demo, el generador mantiene el flujo continuo.
-- **Los lotes de 30 segundos crean archivos pequeños en Delta Lake**, y el DAG horario tiene que compactarlos (ADR-3).
-- **Si se cae la aplicación de Spark, se caen todos los jobs a la vez.** Es el precio de ahorrar memoria en una sola EC2. Airflow la reinicia en un máximo de 5 minutos (ADR-5) y, mientras tanto, el RF-07 no cumple sus 2 minutos.
-- **Silver se actualiza cada hora, no en tiempo real.** Es suficiente para el RF-10 y el RF-11, que piden frescura de 1 hora.
-- **El diseño de Delta Lake y Athena para las métricas por minuto** añade el tiempo de consulta de Athena y de refresco de Superset al presupuesto de 2 minutos del RF-09.
+- **La latencia mínima es la del lote (30 s).** Para respuestas en milisegundos habría que usar Flink.
+- **El *watermark* descarta lo tardío.** Un evento con más de 1 min de retraso no cuenta en tiempo real, y un duplicado posterior al *watermark* no se elimina en el streaming. El batch horario lo corrige, así que las cifras de tiempo real y de Gold pueden diferir hasta esa hora.
+- **El RF-08 queda justo en el límite de 5 min** (3 min de *watermark* más 30 s de *trigger*): hay que medirlo en el E2 y, si no alcanza, bajar el *watermark*. Además, el *watermark* solo avanza con eventos nuevos, así que con poco tráfico una ventana tarda más en cerrarse.
+- **Si se cae la aplicación de Spark, se caen todos los jobs.** Airflow la reinicia en máximo 5 min (ADR-5) y, en ese lapso, el RF-07 no cumple sus 2 min.
+- **Costos de operación.** Los lotes de 30 s crean archivos pequeños que el DAG horario debe compactar (ADR-3), y consultar las métricas por Athena y Superset gasta parte de los 2 min del RF-09.
+- **Silver se actualiza cada hora,** suficiente para los RF-10 y RF-11.
 
 <!-- PENDIENTE (P2 y equipo): (1) Silver lo produce solo el batch: es la recomendación del agente, aceptada por P3 en el chat y falta que P3 actualice el diagrama. (2) El canal de RF-09 (tabla Gold de métricas por minuto consultada con Athena) lo propuso el agente y falta validarlo con P3: el diagrama todavía dice que "debe concretarse". (3) Los valores de trigger (30 s) y watermark (1 min y 3 min), y que el stock actual se guarde como estado por clave, los propuso P2 con el agente; falta validarlos y medirlos en el E2. -->
 
