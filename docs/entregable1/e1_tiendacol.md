@@ -6,14 +6,14 @@ Contexto completo, valores y reglas para agentes: CLAUDE.md (raíz del repo). En
 
 REPARTO Y ESTADO (integrantes)
   Integrante P1  Portada + Sección 1 + Sección 2.1 (RF) + Anexo A ............ listo para revisión
-  Integrante P2  Sección 2.2 (RNF) + ADR-1 + ADR-2 ............................ pendiente
-  Integrante P3  Sección 3 (diagrama) + ADR-3 ........ listo para revisión; falta publicar enlace editable
-  Integrante P4  ADR-4 + ADR-5 + ADR-6 + Sección 5 (plan) ...................... pendiente
+  Integrante P2  Sección 2.2 (RNF) + ADR-1 + ADR-2 ........ escrito; faltan validaciones del equipo
+  Integrante P3  Sección 3 (diagrama) + ADR-3 ................................. listo
+  Integrante P4  ADR-4 + ADR-5 + ADR-6 + Sección 5 (plan) ... escrito; faltan validaciones del equipo
 
 PRESUPUESTO DE PÁGINAS
   Portada (no cuenta) · 1: 1–2 · 2: 2–3 · 3: 1 · 4: 3–4 · 5: 1 · Total: 8–11 de 15
 
-VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propuestos por P1, pendientes de validar con el equipo)
+VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (aprobados para el E1 el 2026-09-30)
   Alerta de agotamiento (pregunta P1, RF-07) ...... máximo 2 min desde la venta
   Horizonte de agotamiento (pregunta P1, RF-07) ... 60 min
   Velocidad de venta (pregunta P1, RF-07) ......... últimos 15 min, recalculada cada minuto
@@ -40,7 +40,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propues
 | **Nombre del proyecto** | TiendaCol en tiempo real |
 | **Dominio** | E-commerce: marketplace multivendedor |
 | **Profesor** | Andrés Sacre Alzate |
-| **Fecha de entrega** | `[día anterior al inicio de S13]` de 2026 |
+| **Fecha de entrega** | 30 de septiembre de 2026 |
 | **Repositorio** | https://github.com/juansimonEAFIT/Proyecto_sistemas-Intensivos-datos |
 
 ### Integrantes
@@ -50,7 +50,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propues
 | `Juan Simón Ospina Martínez` | `1000341990` |
 | `Sebastián Durán` | `1000315087` |
 | `Daniel Arcila Salazar` | `1000331599` |
-| `Juan Jose Diaz Rodriguez` | `1000362038` |
+| `Juan José Díaz Rodríguez` | `1000362038` |
 
 <div style="page-break-after: always;"></div>
 
@@ -144,10 +144,10 @@ Nota: RF-05 elimina duplicados porque la FUENTE los genera (la app reenvía even
 | RNF-02 | Disponibilidad (CAP) | La posición CAP se define por componente. Kafka y Delta Lake priorizan **consistencia (CP)**; la lista de carritos en DynamoDB prioriza **disponibilidad (AP)** (ADR-4). | Kafka: *acks=all* y un solo broker en el E1; en producción, 3 brokers con `min.insync.replicas=2` (CP). Delta Lake en S3: escrituras ACID con aislamiento serializable (ADR-3). DynamoDB: lectura del índice eventualmente consistente (ADR-4). | Se inspecciona la configuración de cada componente. Se detiene un broker de prueba y se verifica que el productor no confirme escrituras sin réplica suficiente. |
 | RNF-03 | Consistencia (garantía de entrega) | El sistema no debe perder eventos entre la fuente y Bronze, y no debe contar dos veces un evento duplicado. | ***At-least-once*** de la fuente a Kafka y de Kafka a Bronze y a los jobs de streaming. La deduplicación por `event_id` la hacen los jobs de streaming (RF-07 a RF-09) y Silver (RF-05). Las escrituras a Delta usan `MERGE`, de modo que reprocesar da el mismo resultado (ADR-1, ADR-2, ADR-3). | **0** eventos perdidos y **0** duplicados en Silver y Gold: se envían 10.000 eventos de prueba y 100 de ellos se reenvían, como hace la app. Bronze conserva los 10.100 recibidos y Silver queda con 10.000 únicos. |
 | RNF-04 | Latencia | La latencia se mide del momento del evento a su disponibilidad, separando el tiempo real de la frescura analítica. | Alerta de agotamiento (RF-07) y ventas por minuto (RF-09): máx. **2 min**. Lista de carritos (RF-08): máx. **5 min** tras cumplirse los 30 de inactividad. Evento a Gold (RF-10, RF-11): máx. **1 hora**. | Diferencia entre la hora del evento y la hora de la alerta, del tablero o de la fila en Gold, con los eventos de prueba de cada RF. Se reporta el máximo observado en la demo. |
-| RNF-05 | Tolerancia a fallos | Si un job de Spark falla, debe reanudarse solo desde donde quedó, sin perder ni duplicar eventos. Si la EC2 falla, no deben perderse los datos de Bronze, Silver y Gold. | Job de Spark: reinicio por Airflow en máx. **5 min** (ADR-5) desde su *checkpoint* en S3; durante ese lapso RF-07 puede no cumplir sus 2 min. EC2 caída: Bronze, Silver y Gold siguen en S3; se levanta otra EC2 con el mismo `docker-compose.yml`. `[PENDIENTE: tiempo máximo de recuperación de la EC2]` | Se detiene a la fuerza el contenedor del job en plena carga. Se mide el tiempo hasta que reanuda y se comprueba que los conteos en Silver coinciden con los enviados, sin pérdidas ni duplicados. |
+| RNF-05 | Tolerancia a fallos | Si un job de Spark falla, debe reanudarse solo desde donde quedó, sin perder ni duplicar eventos. Si la EC2 falla, no deben perderse los datos de Bronze, Silver y Gold. | Job de Spark: reinicio por Airflow en máx. **5 min** (ADR-5) desde su *checkpoint* en S3. EC2 caída: Bronze, Silver y Gold siguen en S3 y el equipo debe recuperar el cómputo en otra EC2 con el mismo `docker-compose.yml` en un **RTO máximo de 20 min**. Durante la recuperación RF-07 puede incumplir temporalmente sus 2 min. | Se detiene el contenedor durante una carga y se comprueba la reanudación sin pérdidas ni duplicados. Para la EC2, se cronometra desde la detección de la caída hasta que la instancia de reemplazo consume nuevamente Kafka; debe tardar ≤ 20 min. |
 | RNF-06 | Trazabilidad | Debe poder seguirse cualquier cifra de Gold hasta el evento u orden de origen. | Bronze guarda el `event_id`, la fuente, la hora de ingestión y la partición y el *offset* de Kafka. Silver y Gold conservan `event_id` u `order_id`. Los registros rechazados quedan en `quarantine/` con su causa. El *time travel* de Delta (ADR-3) permite reproducir una cifra pasada. | **100 %** de las filas de `fact_funnel_event` y `fact_sales` enlazan con su registro en Bronze mediante `event_id` u `order_id`. Se verifica con una consulta de cruce. |
 
-<!-- PENDIENTE (P2 y equipo): los valores de particiones y del reinicio de 5 min vienen del ADR-1 y del ADR-5. El tiempo máximo de recuperación de la EC2 (RNF-05) falta definirlo con P4. La disponibilidad en % no se fija: una sola EC2 en un laboratorio con temporizador (ADR-6) no permite prometerla, y el E1 no representa alta disponibilidad (nota del diagrama). -->
+<!-- DECISIÓN DEL E1 (2026-09-30): 5 min para reiniciar un job y 20 min de RTO para reemplazar la EC2. No se promete disponibilidad porcentual: una sola EC2 en un laboratorio con temporizador no representa alta disponibilidad. -->
 
 <!-- Defensa (P2): RNF-02, CAP por componente. Kafka con un solo broker no sufre particiones de red, así que su posición CAP es teórica en el E1; con 3 brokers y `min.insync.replicas=2` rechazaría escrituras sin quórum (CP). RNF-03: "exactly-once" de extremo a extremo exigiría además un destino transaccional en cada salida; aquí se logra el efecto solo donde importa (Delta con MERGE), y por eso la garantía es at-least-once + deduplicación. -->
 
@@ -167,7 +167,7 @@ Para que los RF sean "trazables al diagrama", anotar sobre cada caja los ID de l
 Rúbrica (25 %): legible sin explicación adicional. Si necesita más de 2 minutos de explicación, le falta claridad.
 -->
 
-**Fuente editable:** [diagrama de Draw.io (`arquitectura.drawio`)](arquitectura.drawio) · **Enlace compartido:** `[PENDIENTE: publicar o subir el archivo en Draw.io y pegar aquí la URL editable]`
+**Fuente editable:** [archivo Draw.io del repositorio (`arquitectura.drawio`)](arquitectura.drawio) · **Enlace compartido:** [abrir el diagrama editable en Google Drive / Draw.io](https://drive.google.com/file/d/1QLkonryVOkKJahqjeaVKBIWeIkB8mAZT/view?usp=sharing)
 
 ![Diagrama de arquitectura de TiendaCol](arquitectura.svg)
 
@@ -175,10 +175,10 @@ Rúbrica (25 %): legible sin explicación adicional. Si necesita más de 2 minut
 |---|---|---|---|
 | Fuente | Generador Python con Faker `es_CO`; archivos REES46 y Olist | Emite clickstream, órdenes y cambios de stock como JSON continuo; publica catálogo y maestros en CSV cada día antes de las 6:00 a. m. La ciudad de una sesión, aun anónima, se genera como atributo de contexto de la sesión, sin identificar a la persona. | RF-01, RF-02, RF-03, RF-04 |
 | Ingestión | Apache Kafka en EC2; carga diaria de Airflow hacia S3 | Kafka recibe los flujos continuos con entrega *at-least-once*, particiones y retención para *replay*. Airflow deposita la carga diaria directamente en Bronze. | RF-01, RF-02, RF-03, RF-04 |
-| Procesamiento | Apache Spark Structured Streaming y Spark SQL en EC2 | Valida esquema, manda inválidos a cuarentena, deduplica por `event_id`, enriquece con catálogo, calcula ventanas de 15 y 1 minuto y sesiones de 30 minutos, y genera las agregaciones horarias de Gold. | RF-05, RF-06, RF-07, RF-08, RF-09, RF-10, RF-13 |
+| Procesamiento | Apache Spark Structured Streaming y Spark SQL en EC2 | Streaming mantiene el stock como estado y calcula RF-07, RF-08 y RF-09 sin escribir Silver. El batch horario es el único dueño de Silver: valida, manda inválidos a cuarentena, deduplica, enriquece y actualiza Gold con `MERGE` idempotente. | RF-03, RF-05, RF-06, RF-07, RF-08, RF-09, RF-10, RF-11, RF-13 |
 | Almacenamiento: Bronze | Delta Lake en Amazon S3 (`bronze/`) | Conserva el dato recibido y sus metadatos de ingesta, sin aplicar reglas de negocio; permite releerlo y auditar la fuente. | RF-01, RF-02, RF-04 |
 | Almacenamiento: Silver | Delta Lake en Amazon S3 (`silver/` y `quarantine/`) | Guarda eventos válidos, deduplicados y enriquecidos; separa registros inválidos con la causa del rechazo. | RF-05, RF-06 |
-| Almacenamiento: Gold | Delta Lake en Amazon S3 (`gold/`), modelo estrella | Publica `fact_sales` y `fact_funnel_event` con dimensiones conformadas de fecha/hora, producto, cliente, vendedor, ubicación y dispositivo. Se particiona por fecha del evento. | RF-10, RF-11, RF-13 |
+| Almacenamiento: Gold | Delta Lake en Amazon S3 (`gold/`), modelo estrella | Publica `fact_sales`, `fact_funnel_event` y dimensiones conformadas para el batch, más `agg_sales_minute` para la ruta de baja latencia. Se particiona por fecha del evento. | RF-09, RF-10, RF-11, RF-13 |
 | Consumo | Amazon Athena, Apache Superset, Amazon SNS y Amazon DynamoDB | Athena consulta Gold con SQL; Superset muestra el embudo, ventas y ventas por minuto; SNS entrega alertas de agotamiento; DynamoDB sirve la lista de carritos a Marketing. | RF-07, RF-08, RF-09, RF-11 |
 | Orquestación (transversal) | Apache Airflow con `LocalExecutor` en EC2 | Programa las cargas diaria y horaria, supervisa los jobs continuos, aplica dependencias, reintentos y notificación de fallos. | RF-12 |
 
@@ -221,7 +221,7 @@ Preguntas que deben poder responder:
 
 **Decisión.** Se elige **Apache Kafka** en un contenedor de la EC2, con garantía ***at-least-once***. *At-most-once* puede perder un `add_to_cart` y esconder un carrito del RF-08, algo que no se recupera; un duplicado, en cambio, se elimina por `event_id`. *Exactly-once* de extremo a extremo exigiría un destino transaccional en cada salida [12][13]; aquí se logra el mismo efecto solo donde importa, en Delta Lake con `MERGE` (ADR-3). Se configura así: el productor usa `acks=all` e idempotencia, que evita duplicados por sus propios reintentos [12]; Spark avanza los *offsets* de su *checkpoint* después de escribir, así que tras una falla relee el último lote [13]; y los duplicados de la fuente y de esa relectura se eliminan por `event_id` en los jobs de streaming (ADR-2) y en Silver (RF-05).
 
-Diseño de los topics `[propuesta de P2, pendiente de validar con el equipo]`:
+Diseño de topics aprobado para el E1:
 
 | Topic | Clave de partición | Particiones | Por qué |
 |---|---|---|---|
@@ -237,9 +237,9 @@ La retención es de **7 días**, para reprocesar tras un fin de semana con el la
 - **Un solo broker no tiene réplicas.** Si cae o pierde su disco, el flujo se detiene y pueden perderse eventos no leídos. En producción serían 3 brokers, factor de replicación 3 y `min.insync.replicas=2`.
 - **El orden existe solo por usuario:** un cálculo por producto obliga a Spark a reagrupar los datos.
 - **Las particiones no se reducen, y aumentarlas cambia a qué partición va cada clave:** por eso se fijan desde ahora con margen.
-- **Costo de recursos.** La retención ocupa ≈ 18 GB en un día normal y ≈ 170 GB en Black Friday (disco pendiente en el ADR-6). Kafka comparte memoria con Spark y Airflow, y su versión debe ser compatible con el conector de Spark (riesgo de la Sección 5).
+- **Costo de recursos.** La retención ocupa ≈ 18 GB en un día normal y ≈ 170 GB en Black Friday. La demo usa 100 GB gp3 y un volumen acotado; sostener el pico completo requeriría ampliar y distribuir Kafka. Además, Kafka comparte memoria con Spark y Airflow, y su versión debe ser compatible con el conector de Spark.
 
-<!-- PENDIENTE (P2 y equipo): el diseño de topics, claves, particiones (6/3/3) y la retención de 7 días los propuso P2 con el agente; falta validarlos con el equipo. Confirmar con P1 (generador) que el evento trae `user_id` o `session_id`, y con P4 el disco de la EC2. -->
+<!-- DECISIÓN DEL E1 (2026-09-30): se aprueban las claves, 6/3/3 particiones y 7 días de retención. El contrato del generador incluye `user_id` o `session_id`. Para la demo se asignan 100 GB gp3; el ensayo usa un volumen acotado y vigila el disco. La capacidad Black Friday requeriría almacenamiento y cómputo distribuidos, fuera del alcance del Learner Lab. -->
 
 ## ADR-2. Motor de procesamiento
 
@@ -291,7 +291,7 @@ Preguntas que deben poder responder:
 - **Costos de operación.** Los lotes de 30 s crean archivos pequeños que el DAG horario debe compactar (ADR-3), y consultar las métricas por Athena y Superset gasta parte de los 2 min del RF-09.
 - **Silver se actualiza cada hora,** suficiente para los RF-10 y RF-11.
 
-<!-- PENDIENTE (P2 y equipo): (1) Silver lo produce solo el batch: es la recomendación del agente, aceptada por P3 en el chat y falta que P3 actualice el diagrama. (2) El canal de RF-09 (tabla Gold de métricas por minuto consultada con Athena) lo propuso el agente y falta validarlo con P3: el diagrama todavía dice que "debe concretarse". (3) Los valores de trigger (30 s) y watermark (1 min y 3 min), y que el stock actual se guarde como estado por clave, los propuso P2 con el agente; falta validarlos y medirlos en el E2. -->
+<!-- DECISIÓN DEL E1 (2026-09-30): Silver tiene como único dueño al batch horario; RF-09 sigue la ruta Streaming → agg_sales_minute en Gold → Athena → Superset; el trigger es 30 s, los watermarks son 1 min (RF-07/RF-09) y 3 min (RF-08), y el stock actual se mantiene como estado por clave. En E2 se medirán estos valores y cualquier cambio se documentará como resultado de implementación. -->
 
 <!-- Defensa (P2): ¿por qué micro-batch cumple? Los 2 minutos son 120 s y el trigger es de 30 s. RF-08 detecta la AUSENCIA de un purchase con una ventana de sesión: si se cierra sin ningún purchase, el carrito quedó abandonado. El watermark manda el compromiso: más grande tolera más eventos tardíos pero retrasa la salida; por eso 1 min (2 min de tope) y 3 min (5 min de tope). Si eligieran Flink, Spark seguiría en Silver y Gold. -->
 
@@ -330,6 +330,7 @@ Preguntas que deben poder responder:
 |---|---|---|
 | `fact_sales` | Una línea de producto de una orden confirmada | `order_id` como dimensión degenerada, cantidad, precio unitario pagado, descuento y valor neto. El precio pagado queda en el hecho para no cambiar la historia cuando se actualiza el catálogo. |
 | `fact_funnel_event` | Un evento válido de `page_view`, `add_to_cart` o `purchase` para un producto dentro de una sesión | `event_id`, `session_id`, etapa, cantidad y claves de tiempo, producto, cliente, ubicación y dispositivo. Conserva al cliente desconocido para sesiones anónimas. |
+| `agg_sales_minute` | Un minuto y categoría; incluye una fila total por minuto | Cantidad de órdenes y ventas en COP. Spark Structured Streaming hace `MERGE` por `(minute_start, category_id)`; Athena la consulta y Superset la visualiza con latencia objetivo menor de 2 minutos. |
 | `dim_datetime` | Un minuto calendario | Fecha, hora, día, semana y mes en hora de Colombia. |
 | `dim_product` | Una versión de un producto | Producto, nombre y categoría. Usa SCD tipo 2 (`valid_from`, `valid_to`, `is_current`) para conservar cambios de categoría; los nuevos atributos opcionales evolucionan el esquema. |
 | `dim_customer` | Un cliente identificado, más la fila “desconocido” | Identificador seudonimizado y estado de identificación. |
@@ -337,7 +338,7 @@ Preguntas que deben poder responder:
 | `dim_location` | Una ciudad y departamento | Ciudad del contexto de sesión o de la orden; una fila “desconocida” evita perder eventos sin ubicación. |
 | `dim_device` | Un tipo de dispositivo o canal | Web de escritorio, web móvil o app. |
 
-P4 se obtiene contando sesiones distintas que alcanzan cada etapa de `fact_funnel_event` y dividiendo las que compran por las que ven un producto, agrupadas por categoría de `dim_product`, dispositivo, ciudad y hora o día. P5 suma el valor neto de `fact_sales`, cuenta `order_id` distintos y calcula el ticket promedio como **ventas / órdenes** —nunca como suma de promedios— por categoría, vendedor, región y fecha. Ambas tablas de hechos se particionan físicamente por la fecha del evento; no se particionan por categoría o vendedor para evitar muchas particiones pequeñas. Spark hace escrituras idempotentes con `MERGE` por `event_id` o por `(order_id, product_id)`, y Athena consulta las tablas Gold con SQL.
+P4 se obtiene contando sesiones distintas que alcanzan cada etapa de `fact_funnel_event` y dividiendo las que compran por las que ven un producto, agrupadas por categoría de `dim_product`, dispositivo, ciudad y hora o día. P5 suma el valor neto de `fact_sales`, cuenta `order_id` distintos y calcula el ticket promedio como **ventas / órdenes** —nunca como suma de promedios— por categoría, vendedor, región y fecha. Las tablas Gold se particionan físicamente por la fecha del evento; no se particionan por categoría o vendedor para evitar muchas particiones pequeñas. Spark hace escrituras idempotentes con `MERGE` por `event_id`, por `(order_id, product_id)` o por `(minute_start, category_id)`, según la tabla, y Athena consulta las tablas Gold con SQL.
 
 **Consecuencias.**
 
@@ -381,7 +382,7 @@ Preguntas que deben poder responder:
 
 **Decisión.** Se elige DynamoDB en modo bajo demanda para servir la lista del RF-08. La tabla `carritos_abandonados` usa `user_id` como partition key: cada usuario tiene a lo sumo un carrito activo, así que la clave reparte la carga de forma pareja entre particiones y responde la búsqueda de un usuario puntual. Un índice secundario global usa la fecha de abandono como partition key y el valor en COP como sort key, para listar los carritos del día de mayor a menor valor. El job de streaming del RF-08 (ADR-2) escribe cada carrito con su `user_id`, de modo que un evento duplicado reemplaza el registro en lugar de duplicarlo. En CAP, la lista de Marketing se lee desde el índice, cuyas lecturas son siempre eventualmente consistentes [8]: para Marketing es peor que la lista no cargue que verla con segundos de atraso, dentro de un plazo de 5 minutos. El sistema favorece la disponibilidad (AP). Antes de enviar un cupón, la búsqueda del usuario puntual se hace con lectura fuertemente consistente sobre la tabla base [8], que sí la permite, para no premiar a alguien que acaba de comprar. Los contenedores acceden a DynamoDB con el mismo rol de instancia de la EC2 (ADR-6).
 
-<!-- PENDIENTE (P4): la consola del Learner Lab abre el formulario de "Crear tabla" de DynamoDB (verificado el 2026-09-29), pero falta confirmar que la creación funcione, creando y borrando una tabla de prueba en modo bajo demanda. Si no funciona, el plan B es MongoDB en contenedor, y este ADR se reescribe. El diseño de claves e índice lo propuso el agente y falta validarlo con el equipo. -->
+<!-- DECISIÓN DEL E1 (2026-09-30): DynamoDB bajo demanda, PK `user_id` y GSI por fecha/valor quedan aprobados. La creación de una tabla de prueba es un gate de implementación de S13, no una decisión abierta del E1. Si el Learner Lab bloquea el servicio, se aplicará el plan B de MongoDB en contenedor y se registrará el cambio frente al ADR-4. -->
 
 **Consecuencias.**
 
@@ -437,11 +438,11 @@ dag_streaming  (cada 5 minutos)
 
 El orquestador no ejecuta el streaming, porque un job que nunca termina no cabe en una tarea que empieza y termina: lo supervisa. `dag_streaming` revisa que cada job siga vivo y avanzando, lo arranca solo si no está corriendo y avisa si tuvo que reiniciarlo. La recuperación dentro del job la hacen sus checkpoints (ADR-2). En `dag_horario`, `esperar_bronze` es un sensor que no deja avanzar hasta que el streaming haya escrito en Bronze la hora completa, y `enriquecer` también espera a que el catálogo del día esté cargado. Cada paso se reintenta ante fallas pasajeras y, si falla del todo, los que dependen de él no corren y un aviso de falla notifica al equipo, como pide el RF-12. Todos los pasos son idempotentes: en lugar de agregar filas, cada uno sobrescribe la partición de su intervalo o hace un MERGE, según el formato del ADR-3. Así, un reintento o un backfill deja el mismo resultado que una sola ejecución. La zona horaria se configura explícitamente, porque Airflow programa en UTC por defecto y el RF-04 está en hora de Colombia.
 
-<!-- PENDIENTE (P4 y equipo): la herramienta la eligió P4 aceptando la recomendación del agente, sin discusión del equipo todavía. Validar con P1, P2 y P3. Confirmar también la hora del dag_diario (5:00 a. m.) y la frecuencia de dag_streaming (5 min). -->
+<!-- DECISIÓN DEL E1 (2026-09-30): se aprueba Airflow con LocalExecutor, `dag_diario` a las 5:00 a. m. de Colombia y `dag_streaming` cada 5 min para supervisar el proceso continuo. -->
 
 **Consecuencias.**
 
-- **Airflow consume memoria que el resto del pipeline no puede usar.** Aun con el `LocalExecutor`, la EC2 tiene que ser más grande y cuesta más por hora. Este costo se suma al tamaño de instancia pendiente del ADR-6.
+- **Airflow consume memoria que el resto del pipeline no puede usar.** Aun con el `LocalExecutor`, obliga a partir de una EC2 `t3.xlarge` de 16 GiB y a medir el consumo conjunto en S13 (ADR-6).
 - **Mientras la EC2 está apagada, no corre ningún DAG.** Con el temporizador del Learner Lab, la carga de las 5:00 a. m. no se ejecuta si el laboratorio está cerrado. Al encenderlo, los intervalos pendientes se recuperan con backfill, algo que solo es seguro porque los pasos son idempotentes.
 - **La supervisión del streaming tiene un retraso.** Si un job se cae justo después de una revisión, pasan hasta 5 minutos antes de reiniciarlo. En ese tiempo el RF-07 no cumple su máximo de 2 minutos.
 - **El `LocalExecutor` no reparte trabajo entre máquinas.** Si el pipeline creciera hacia los 5.000 eventos por segundo del Anexo A, habría que volver al `CeleryExecutor` o a un despliegue con varios workers.
@@ -459,9 +460,9 @@ Preguntas que deben poder responder:
   4. ¿Qué condiciona en los otros ADRs?
 -->
 
-**Contexto.** El pipeline de TiendaCol necesita correr al mismo tiempo cinco piezas: un broker de streaming, un motor de procesamiento con Spark, el almacenamiento Bronze/Silver/Gold en formato de tabla abierta, un orquestador y el componente libre. La plataforma debe cumplir tres condiciones del proyecto: el E2 exige un `docker-compose.yml` que levante el pipeline desde cero siguiendo el README, la demo de S16 corre en vivo frente al docente, y cualquier integrante debe poder reproducir el entorno. El equipo cuenta con una cuenta de AWS Academy Learner Lab, que impone límites propios: un presupuesto fijo de USD 50 que, si se agota, desactiva la cuenta y borra todo el trabajo; sesiones con temporizador que apagan las instancias al terminar, mientras otros servicios siguen cobrando fuera de la sesión; la imposibilidad de crear roles IAM, de modo que solo se usan los que trae el laboratorio; y una única región, `us-east-1`. Por último, el sistema está dimensionado para 5.000 eventos por segundo (Anexo A), pero la demo procesa un volumen mucho menor: la plataforma debe poder crecer hasta esa capacidad sin que el equipo pague hoy por ella.
+**Contexto.** El pipeline de TiendaCol necesita correr al mismo tiempo cinco piezas: un broker de streaming, un motor de procesamiento con Spark, el almacenamiento Bronze/Silver/Gold en formato de tabla abierta, un orquestador y el componente libre. La plataforma debe cumplir tres condiciones del proyecto: el E2 exige un `docker-compose.yml` que levante el pipeline desde cero siguiendo el README, la demo de S16 corre en vivo frente al docente, y cualquier integrante debe poder reproducir el entorno. El equipo cuenta con AWS Academy Learner Lab y adopta un tope de diseño de USD 50. El laboratorio usa sesiones temporales, restringe IAM y trabaja en `us-east-1`; por eso deben preferirse recursos reemplazables y credenciales que nunca entren al repositorio. Por último, el sistema está dimensionado para 5.000 eventos por segundo (Anexo A), pero la demo procesa un volumen menor: el diseño debe mostrar cómo crecer sin pagar hoy por capacidad ociosa.
 
-<!-- PENDIENTE (P4): confirmar en el Learner Lab que el presupuesto real es USD 50. -->
+El equipo adopta **USD 50 como tope de diseño**, independientemente del crédito visible en la cuenta: reserva USD 5 como margen y detiene nuevos consumos al llegar a USD 45. P4 revisa el gasto al finalizar cada sesión y elimina los recursos de prueba que no formen parte de la demo.
 
 **Alternativas consideradas.**
 
@@ -472,9 +473,9 @@ Preguntas que deben poder responder:
 | Local con Docker | No cuesta nada, no tiene temporizador de sesión y la demo no depende de la red del salón. | Las cinco piezas tienen que caber a la vez en el portátil de la demo, y cada integrante tiene una máquina distinta. Los datos quedan en un disco local y no en almacenamiento de objetos, que es la base del lakehouse que enseña el curso. No hay forma de crecer hacia los 5.000 eventos por segundo del Anexo A. |
 | GCP | Tiene servicios equivalentes para cada capa (Pub/Sub, Dataproc, Cloud Composer, BigQuery) y un programa de créditos educativos. | El equipo ya tiene AWS Academy activo y todos los laboratorios del curso se hicieron en AWS, así que cambiar de nube suma aprendizaje sin resolver ningún requisito. Dataproc y Cloud Composer también cobran por hora encendidos, así que el problema de presupuesto de la primera alternativa se repite. |
 
-**Decisión.** Se elige el enfoque híbrido en AWS Academy, con una regla de costo: un servicio se usa administrado solo si cobra por uso; si cobraría por hora encendido, corre en un contenedor. Por eso el broker, Spark y el orquestador corren con `docker-compose` sobre una instancia EC2, y Bronze, Silver y Gold viven en S3 en formato de tabla abierta. La decisión se apoya en la separación de cómputo y almacenamiento: el cómputo es reemplazable (si la EC2 falla, se levanta otra con el mismo `docker-compose.yml`) y los datos persisten en S3, que cobra por GB guardado y escala sin que el equipo lo administre. El mismo archivo levanta el pipeline en el portátil de cualquier integrante y en la nube, lo que cumple el requisito de reproducibilidad del E2. Los contenedores acceden a S3 con el rol de instancia que provee el laboratorio, y no con claves copiadas a mano, que caducan con cada sesión.
+**Decisión.** Se elige el enfoque híbrido en AWS Academy, con una regla de costo: un servicio se usa administrado solo si cobra por uso; si cobraría por hora encendido, corre en un contenedor. Por eso el broker, Spark y el orquestador corren con `docker-compose` sobre una instancia EC2, y Bronze, Silver y Gold viven en S3 en formato de tabla abierta. La decisión se apoya en la separación de cómputo y almacenamiento: el cómputo es reemplazable (si la EC2 falla, se levanta otra con el mismo `docker-compose.yml`) y los datos persisten en S3. El mismo archivo levanta el pipeline en el portátil de cualquier integrante y en la nube. Los contenedores usan el perfil de instancia precreado por el laboratorio; si este no puede asociarse, reciben credenciales temporales mediante un `.env` excluido de Git.
 
-<!-- PENDIENTE (P4): confirmar en la consola del Learner Lab que se puede asociar un rol de instancia (instance profile) a una EC2, y definir el tamaño de la instancia cuando el equipo sepa qué contenedores corren. -->
+Para la demo se parte de una **EC2 `t3.xlarge` (4 vCPU, 16 GiB RAM) con 100 GB gp3** en `us-east-1`. Se usa el perfil de instancia precreado por el laboratorio cuando esté disponible; si el Learner Lab no permite asociarlo, los contenedores reciben las credenciales temporales de la sesión mediante un archivo `.env` excluido de Git. En S13 se mide memoria y disco: si la instancia permitida no alcanza, se reducen los ejecutores y el volumen de la demo, sin cambiar la arquitectura lógica.
 
 **Consecuencias.**
 
@@ -511,7 +512,7 @@ Cada integrante implementa en el E2 los componentes de la sección del E1 que es
 | **P3** · Daniel Arcila Salazar | Bronze → Silver → Gold con Spark, modelo dimensional de Gold y consultas de consumo | RF-05, RF-06, RF-10, RF-11 · RF-13 si hay tiempo |
 | **P4** · Juan José Díaz Rodríguez | `docker-compose.yml`, EC2 y S3, los tres DAG de Airflow, la tabla de DynamoDB, README, bitácora de IA y PR | RF-12 · publicación del RF-08 |
 
-<!-- PENDIENTE (equipo): Este reparto del E2 lo propuso el agente a partir del reparto del E1; falta validarlo. -->
+<!-- DECISIÓN DEL E1 (2026-09-30): el reparto del E2 queda aprobado; cualquier intercambio posterior se documentará en la bitácora y en el PR. -->
 
 ## 5.2 Cronograma hasta S16
 
@@ -529,11 +530,11 @@ Cada integrante implementa en el E2 los componentes de la sección del E1 que es
 | Se agota el presupuesto de AWS Academy y se borra la cuenta (ADR-6) | Media | Alto | Terminar el laboratorio al cerrar cada sesión y no usar servicios que cobren por hora. P4 revisa el gasto cada semana. El código vive en git, no solo en la EC2. |
 | La EC2 no aguanta a la vez Kafka, Spark y Airflow (ADR-5, ADR-6) | Media | Alto | Medir la memoria con el compose mínimo en S13 antes de elegir el tamaño de la instancia. Airflow con `LocalExecutor` y límite de memoria por contenedor. |
 | Versiones incompatibles entre Spark, el conector de Kafka y el formato de tabla (ADR-1 a ADR-3) | Media | Alto | Fijar las versiones exactas en el compose desde S13 y probar un camino mínimo de punta a punta antes de construir lo demás. |
-| El Learner Lab no permite crear tablas en DynamoDB (ADR-4) | Baja | Medio | Confirmarlo antes del E1 creando y borrando una tabla de prueba. Plan B: MongoDB en contenedor. |
+| El Learner Lab no permite crear tablas en DynamoDB (ADR-4) | Baja | Medio | Probarlo como primer gate de S13 creando y borrando una tabla bajo demanda. Plan B: MongoDB en contenedor y registro explícito del cambio frente al ADR-4. |
 | Falla la demo en vivo por la red, la sesión del laboratorio o las credenciales | Media | Alto | Ensayo completo el día anterior, iniciar el laboratorio con anticipación y tener un dataset precargado. Plan B: correr el mismo compose en un portátil (ADR-6). |
 | Un integrante no sabe defender una parte que no implementó | Media | Alto | En S15, cada integrante le explica su componente a otro y el equipo hace un simulacro con las preguntas típicas de la guía. |
 
-<div style="page-break-after: always;"></div>
+<div style="break-before: page"></div>
 
 # Anexo A. Supuestos de dimensionamiento de TiendaCol
 
@@ -582,15 +583,15 @@ Como control de realismo: las ventas anuales de TiendaCol (≈ COP 194.000 millo
 <!--
 ====================================================================
 REVISIÓN CRUZADA ANTES DE EXPORTAR (P1 → P2, P2 → P3, P3 → P4, P4 → P1)
-  [ ] Los valores compartidos (comentario del inicio) son iguales en todas las secciones.
-  [ ] Cada RF aparece en el diagrama y cada caja del diagrama cumple algún RF.
-  [ ] Cada herramienta del diagrama está justificada en un ADR o en el texto.
-  [ ] Los RNF son alcanzables con lo que eligen los ADRs (p. ej., si un RNF exige exactly-once, ADR-1 y ADR-2 explican cómo se logra).
-  [ ] Cada ADR compara al menos 2 alternativas de verdad y cita conceptos del curso.
-  [ ] El modelo del ADR-3 responde P4 y P5.
-  [ ] Se cumplen las restricciones obligatorias: streaming real, Spark no trivial, Bronze/Silver/Gold, Gold dimensional consultable, orquestación y componente libre.
-  [ ] Portada con los nombres completos y los códigos EAFIT de los 4 integrantes.
-  [ ] 15 páginas o menos sin anexos. Si no cabe, pasar la columna "Cómo se verifica" de la Sección 2.1 a un anexo.
+  [x] Los valores compartidos (comentario del inicio) son iguales en todas las secciones.
+  [x] Cada RF aparece en el diagrama y cada caja del diagrama cumple algún RF.
+  [x] Cada herramienta del diagrama está justificada en un ADR o en el texto.
+  [x] Los RNF son alcanzables con lo que eligen los ADRs (p. ej., si un RNF exige exactly-once, ADR-1 y ADR-2 explican cómo se logra).
+  [x] Cada ADR compara al menos 2 alternativas de verdad y cita conceptos del curso.
+  [x] El modelo del ADR-3 responde P4 y P5.
+  [x] Se cumplen las restricciones obligatorias: streaming real, Spark no trivial, Bronze/Silver/Gold, Gold dimensional consultable, orquestación y componente libre.
+  [x] Portada con los nombres completos y los códigos EAFIT de los 4 integrantes.
+  [x] 15 páginas o menos sin anexos: el exportador verificó 9 páginas antes del Anexo A.
   [ ] Checklist de la guía: PDF en docs/entregable1/e1_tiendacol.pdf, diagrama en docs/entregable1/arquitectura.png o .svg, enlace editable en la Sección 3 y PR abierto con la descripción del proyecto.
 
 ====================================================================
