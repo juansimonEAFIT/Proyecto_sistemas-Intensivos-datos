@@ -2,7 +2,7 @@
 
 > **Para humanos y agentes de IA.** Este archivo es la fuente de verdad del proyecto: qué se entrega, qué ya está escrito, qué valores ya están fijados, qué falta y qué **no** se puede inventar. Un agente debe leerlo completo antes de escribir texto o código.
 >
-> Última actualización: 2026-09-29.
+> Última actualización: 2026-09-30.
 
 ---
 
@@ -11,8 +11,8 @@
 - **Qué:** proyecto final en grupos de 4. **E1** es un documento sin código (entrega antes de S13) y **E2** es código, presentación, demo y defensa (S16).
 - **Dominio:** e-commerce. La empresa es **TiendaCol**, un marketplace colombiano ficticio.
 - **Documento del E1:** un **único archivo**, [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md). Se exporta a `docs/entregable1/e1_tiendacol.pdf`. **No crear archivos separados por sección:** el equipo lo decidió así.
-- **Estado:** la parte del integrante P1 está escrita (portada, Sección 1, Sección 2.1 y Anexo A). Las secciones de los integrantes P2, P3 y P4 tienen solo la estructura, con marcadores `[...]`.
-- **Ninguna herramienta está elegida todavía.** Los ADR están vacíos. Un agente **no** elige herramientas por el equipo (ver §9).
+- **Estado:** E1 completo: contenido y decisiones cerrados, portada completa, PDF dentro del límite y enlace editable configurado. El código de P4 (`1000362038`) llegó en el commit remoto `d47ed85` y la fecha de entrega es el 30 de septiembre de 2026.
+- **Stack elegido para el E1:** Kafka y Spark en contenedores sobre EC2; Delta Lake en S3; DynamoDB; Airflow con `LocalExecutor`; Athena, SNS y Superset para consumo. El equipo conservará aparte una alternativa más administrada con Kinesis, Glue, SQS y Lambda para evaluarla después de la retroalimentación del profesor.
 - **Bitácora de IA:** [docs/bitacora_ia.md](docs/bitacora_ia.md) está vacía **a propósito**. Se llena en E2. No escribir en ella (ver §9.6).
 
 ### Orden de lectura para un agente
@@ -107,15 +107,15 @@ Archivo: [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md).
 
 | Sección | Responsable | Estado |
 |---|---|---|
-| Portada | Integrante P1 | Escrita. Faltan nombre y código de los integrantes P2, P3 y P4, y la fecha de entrega. |
+| Portada | Integrante P1 | Completa: nombres, códigos, proyecto, dominio y fecha de entrega. |
 | 1. Definición del problema | Integrante P1 | Escrita, lista para revisión. |
 | 2.1 Requisitos funcionales (RF-01 a RF-13) | Integrante P1 | Escrita, lista para revisión. |
-| 2.2 Requisitos no funcionales | Integrante P2 | Solo estructura (tabla RNF-01 a RNF-06 con `[...]`). |
-| 3. Diagrama | Integrante P3 | Solo estructura. La tabla de capas ya trae los RF de cada capa. |
-| 4. ADR-1 y ADR-2 | Integrante P2 | Solo estructura. |
-| 4. ADR-3 | Integrante P3 | Solo estructura. |
-| 4. ADR-4, ADR-5 y ADR-6 | Integrante P4 | Escritos el 2026-09-29, con pendientes de validación marcados como `<!-- PENDIENTE -->`. |
-| 5. Plan de implementación | Integrante P4 | Escrito el 2026-09-29. Faltan los nombres de P2 y P3, y validar el reparto del E2. |
+| 2.2 Requisitos no funcionales | Integrante P2 | Escrita y validada (2026-09-30), con RTO de EC2 de 20 min en RNF-05. |
+| 3. Diagrama | Integrante P3 | Escrito y exportado a Draw.io y SVG. El enlace compartido de Google Drive fue comprobado sin iniciar sesión. |
+| 4. ADR-1 y ADR-2 | Integrante P2 | Escritos y validados (2026-09-30): topics 6/3/3, retención 7 días, trigger 30 s, watermarks 1/3 min, batch como único dueño de Silver y canal de RF-09 por Gold/Athena/Superset. |
+| 4. ADR-3 | Integrante P3 | Escrito: Delta Lake en S3 y modelo estrella con hechos de ventas y embudo, más `agg_sales_minute` para RF-09. |
+| 4. ADR-4, ADR-5 y ADR-6 | Integrante P4 | Escritos y validados: DynamoDB bajo demanda, Airflow LocalExecutor y plataforma híbrida con tope de USD 50. Las pruebas de permisos quedan como gates de S13. |
+| 5. Plan de implementación | Integrante P4 | Escrito y reparto del E2 aprobado el 2026-09-30. |
 | Anexo A. Supuestos de dimensionamiento | Integrante P1 | Escrito. |
 | Referencias | Todos | [1] a [6] escritas por el integrante P1. Los demás agregan desde la [7]. |
 
@@ -162,21 +162,21 @@ Hoy decide con reportes **del día siguiente** que salen de la base transacciona
 
 ## 4. Valores compartidos (usar exactamente estos)
 
-Los propuso el integrante P1 y están **pendientes de validar con el equipo**. Un agente **los usa tal cual** y **no propone valores distintos** por su cuenta. Si el humano quiere cambiar uno, es una decisión del equipo, y hay que actualizarlo en **todos** los lugares de la columna derecha.
+Los propuso el integrante P1 y el equipo los **aprobó para el E1 el 2026-09-30**. Un agente los usa tal cual. Si el humano quiere cambiar uno, es una decisión del equipo y hay que actualizarlo en todos los lugares de la columna derecha.
 
 | Valor | Cifra | Dónde aparece en `e1_tiendacol.md` |
 |---|---|---|
-| Latencia de la alerta de agotamiento | máx. **2 min** desde la venta | Comentario inicial · 1.4 (P1) · RF-07 · notas de defensa · RNF de latencia (pendiente) |
+| Latencia de la alerta de agotamiento | máx. **2 min** desde la venta | Comentario inicial · 1.4 (P1) · RF-07 · notas de defensa · RNF de latencia |
 | Horizonte de agotamiento | **60 min** | 1.4 (P1) · RF-07 |
 | Ventana de velocidad de venta | últimos **15 min**, recalculada cada minuto | 1.4 (P1) · RF-07 |
 | Carrito abandonado de alto valor | usuario **identificado**, **COP 500.000** o más, **30 min** sin compra ni cambios | 1.4 (P2) · RF-08 |
 | Publicación de la lista a Marketing | máx. **5 min** después de cumplidos los 30 | 1.4 (P2) · RF-08 |
 | Ventas por minuto | visibles máx. **2 min** después de cerrado el minuto | 1.4 (P3) · RF-09 |
-| Frescura de Gold | máx. **1 hora** | 1.4 (P4, P5) · RF-10 · RF-11 · RNF de latencia (pendiente) |
+| Frescura de Gold | máx. **1 hora** | 1.4 (P4, P5) · RF-10 · RF-11 · RNF de latencia |
 | Usuarios activos al mes | **1,5 millones** | 1.1 · Anexo A |
 | Eventos de navegación | ≈ **75 millones/mes** (≈ 1 TB crudo al año) | 1.5 · Anexo A |
 | Tráfico | ≈ 29 eventos/s en un día normal; pico ≈ **3.000 eventos/s** en Black Friday | 1.5 · Anexo A |
-| Capacidad objetivo | **5.000 eventos/s** | Anexo A · RNF de escalabilidad (pendiente) · ADR-1 (particiones) |
+| Capacidad objetivo | **5.000 eventos/s** | Anexo A · RNF de escalabilidad · ADR-1 (particiones) |
 | Órdenes por día | 2.500 (normal) / 24.000 (Black Friday) | 1.1 · Anexo A |
 | Ticket promedio | **COP 212.373** (CCCE, 2025) | 1.1 · 1.4 · Anexo A |
 | Dispositivos | web de escritorio, web móvil, app | 1.4 (P4) |
@@ -224,26 +224,26 @@ Texto completo en la Sección 2.1. Los RF dicen **qué** hace el sistema, **no c
 | Integrante | Nombre | Rol | Escribe en `e1_tiendacol.md` |
 |---|---|---|---|
 | **P1** | Juan Simón Ospina Martínez (código 1000341990) | Negocio y requisitos funcionales | Portada, Sección 1, Sección 2.1, Anexo A |
-| **P2** | _(por definir)_ | Calidad y streaming | Sección 2.2 (RNF), ADR-1, ADR-2 |
-| **P3** | _(por definir)_ | Arquitectura | Sección 3 (diagrama + tabla de capas), ADR-3 |
+| **P2** | Sebastián Durán (código 1000315087) | Calidad y streaming | Sección 2.2 (RNF), ADR-1, ADR-2 |
+| **P3** | Daniel Arcila Salazar (código 1000331599) | Arquitectura | Sección 3 (diagrama + tabla de capas), ADR-3 |
 | **P4** | Juan José Díaz Rodríguez | Componentes y plan | ADR-4, ADR-5, ADR-6 (opcional), Sección 5, repo y PR |
 
 Al final hay **revisión cruzada** (P1 → P2, P2 → P3, P3 → P4, P4 → P1) usando la checklist del comentario final de `e1_tiendacol.md`.
 
-**Nota:** el reparto original menciona "Delta Lake" (ADR-3) y "Airflow" (ADR-5) porque son las **referencias del curso**. **No son decisiones tomadas:** cada ADR debe comparar alternativas de verdad y el equipo elige.
+**Nota:** el reparto original menciona "Delta Lake" y "Airflow" como referencias del curso. El equipo ya eligió ambas herramientas, después de compararlas con alternativas en los ADR correspondientes.
 
 ---
 
-## 7. Decisiones técnicas (ADRs): TODAS PENDIENTES
+## 7. Decisiones técnicas (ADRs)
 
 | ADR | Decisión | Opciones a evaluar | Conceptos del curso a citar | Responsable | Estado |
 |---|---|---|---|---|---|
-| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | **Decidido por el equipo (2026-09-29): Kafka con at-least-once.** Falta redactarlo. Kinesis queda descartado por el ADR-6 (cobra por shard-hora) |
-| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | **Decidido por el equipo (2026-09-29): Spark.** Falta redactarlo. Ojo: con at-least-once, los jobs de RF-07 a RF-09 leen de Kafka antes de Silver y también tienen que eliminar duplicados por identificador de evento |
-| ADR-3 | Formato de Gold y modelo dimensional | Delta Lake, Iceberg | star schema, grano, ACID, schema evolution | Integrante P3 | Pendiente. Por el ADR-6, Gold vive en S3: Delta Lake e Iceberg siguen siendo opciones |
-| ADR-4 | Componente libre y su posición CAP | MongoDB, Cassandra, DynamoDB, Redis, Neo4j, Trino/Athena… | CAP (CP vs AP), sharding, partition key | Integrante P4 | **Escrito (2026-09-29): DynamoDB bajo demanda para el RF-08, AP, partition key `user_id`.** Falta confirmar que el Learner Lab permita crear tablas; plan B, MongoDB |
-| ADR-5 | Orquestación y dependencias del DAG | Airflow, Dagster, Prefect | DAG, dependencias, reintentos, idempotencia | Integrante P4 | **Escrito (2026-09-29): Airflow con `LocalExecutor`, tres DAG.** Falta validarlo con el equipo |
-| ADR-6 *(opcional)* | Plataforma | AWS, GCP, local con Docker | costo, reproducibilidad, servicios gestionados | Integrante P4 | **Escrito (2026-09-29): AWS Academy, híbrido.** Contenedores en EC2 para lo que cobraría por hora, S3 y servicios por uso para el resto |
+| ADR-1 | Motor de streaming y garantía de entrega | Kafka, Kinesis, Redpanda | at-most/at-least/exactly-once, particiones, retención | Integrante P2 | **Aprobado:** Kafka con at-least-once, topics 6/3/3 y retención de 7 días. Kinesis queda descartado por costo continuo |
+| ADR-2 | Motor de procesamiento | Spark Structured Streaming, Flink, batch puro | micro-batch vs por evento, checkpoints, watermarks, ventanas | Integrante P2 | **Decidido por el equipo (2026-09-29): Spark.** Silver lo produce solo el batch horario. Streaming mantiene el stock actual como estado (RF-03), elimina duplicados para RF-07 a RF-09 y escribe `agg_sales_minute` en Gold para que Athena y Superset atiendan RF-09 |
+| ADR-3 | Formato de Gold y modelo dimensional | Delta Lake, Iceberg | star schema, grano, ACID, schema evolution | Integrante P3 | **Decidido por el equipo (2026-09-30): Delta Lake en S3**, con `fact_sales`, `fact_funnel_event`, `agg_sales_minute` y dimensiones conformadas |
+| ADR-4 | Componente libre y su posición CAP | MongoDB, Cassandra, DynamoDB, Redis, Neo4j, Trino/Athena… | CAP (CP vs AP), sharding, partition key | Integrante P4 | **Aprobado:** DynamoDB bajo demanda para RF-08, AP, PK `user_id`; prueba de permiso en S13 y plan B MongoDB |
+| ADR-5 | Orquestación y dependencias del DAG | Airflow, Dagster, Prefect | DAG, dependencias, reintentos, idempotencia | Integrante P4 | **Aprobado:** Airflow con `LocalExecutor`, DAG diario 05:00, horario y supervisión cada 5 min |
+| ADR-6 *(opcional)* | Plataforma | AWS, GCP, local con Docker | costo, reproducibilidad, servicios gestionados | Integrante P4 | **Aprobado:** AWS Academy híbrido, `t3.xlarge`/100 GB gp3 para demo, tope USD 50, contenedores en EC2 y almacenamiento/servicios por uso |
 
 **Cuando el equipo tome una decisión:** actualizar la columna "Estado" de esta tabla con la opción elegida y la fecha, y escribir el ADR en el documento.
 
@@ -254,7 +254,7 @@ Al final hay **revisión cruzada** (P1 → P2, P2 → P3, P3 → P4, P4 → P1) 
 **Punto de partida para el modelo de Gold (no es decisión):**
 - Hechos candidatos: ventas por línea de orden; eventos del embudo.
 - Dimensiones candidatas: cliente, producto, categoría, vendedor, fecha/hora, ubicación (ciudad/departamento), dispositivo/canal.
-- **Pregunta abierta para el ADR-3:** de dónde sale la ciudad de una sesión anónima (P4).
+- La ciudad de una sesión anónima se genera como atributo del contexto de sesión, sin identificar a la persona; Silver la resuelve contra `dim_location` y usa la fila “desconocida” cuando no está disponible.
 
 ---
 
@@ -304,7 +304,7 @@ No son parte del E1: allí la "Fuente" del diagrama son los sistemas de TiendaCo
 Si falta alguno de estos datos, **preguntarle al humano** o dejar el marcador `[...]` con un comentario `<!-- PENDIENTE: ... -->`. Nunca llenarlo con algo que "suena plausible".
 
 - **La herramienta elegida en cualquier ADR.** El agente puede explicar y comparar opciones, pero la "Decisión" la escribe a partir de lo que el humano diga que el equipo eligió y por qué.
-- Nombres y códigos de los integrantes P2, P3 y P4. Fechas exactas de S13 y S16.
+- La fecha exacta de S16, cuando el profesor la publique; el E1 se entrega el 30 de septiembre de 2026.
 - Cifras de mercado o estadísticas sin una fuente real y verificable con URL. Toda cifra externa va con su referencia numerada.
 - Valores de negocio distintos a los de §4.
 - Enlaces: la URL editable del diagrama y cualquier URL no verificada.
@@ -370,13 +370,16 @@ Las carpetas y archivos marcados con **(E2)** ya existen como **marcadores de po
 ├── .github/
 │   └── pull_request_template.md   # plantilla que GitHub carga al abrir un PR
 ├── docker-compose.yml             # (E2) levanta todos los servicios, o su equivalente según el ADR-6
+├── arquitectura_alternativa_aws_administrada.drawio # alternativa futura, no oficial para E1
+├── arquitectura_alternativa_aws_administrada.svg    # vista de la alternativa futura
 ├── .env.example                   # (E2) variables de configuración, sin secretos
 ├── .gitignore                     # (E2) excluye data/, credenciales y archivos temporales
 ├── docs/
 │   ├── entregable1/
 │   │   ├── e1_tiendacol.md        # documento E1 completo (fuente del PDF)
-│   │   ├── e1_tiendacol.pdf       # (pendiente) exportación final
-│   │   └── arquitectura.png       # (pendiente, integrante P3) o .svg
+│   │   ├── e1_tiendacol.pdf       # exportación final (9 páginas antes del anexo)
+│   │   ├── arquitectura.drawio    # fuente editable del diagrama oficial del E1
+│   │   └── arquitectura.svg       # exportación vectorial del diagrama oficial
 │   ├── entregable2/               # slides de E2 (máx. 15)
 │   └── bitacora_ia.md             # vacía hasta E2 (ver §9.6); OBLIGATORIA en E2 (sin ella: -10 %)
 ├── data/                          # (E2) datasets descargados de §8.1; NO se suben a git

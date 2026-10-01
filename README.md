@@ -4,16 +4,16 @@ Proyecto final de **ST1630 – Sistemas Intensivos en Datos** (Universidad EAFIT
 
 TiendaCol (nombre provisional) es un marketplace colombiano ficticio. Hoy toma decisiones con reportes del día siguiente y eso le cuesta ventas: productos que se agotan sin aviso en los picos, carritos abandonados que nadie recupera a tiempo y un embudo de compra que no se entiende. Este proyecto diseña (E1) e implementa (E2) el pipeline de datos que resuelve esos problemas.
 
-El contexto completo, las restricciones, las decisiones pendientes, los enlaces a los datasets y las reglas para agentes de IA están en [CLAUDE.md](CLAUDE.md).
+El contexto completo, las restricciones, las decisiones técnicas, los enlaces a los datasets y las reglas para agentes de IA están en [CLAUDE.md](CLAUDE.md).
 
 ## Estado
 
 | Entrega | Estado |
 |---|---|
-| E1: documento + diagrama (sin código) | En construcción: ver [docs/entregable1/e1_tiendacol.md](docs/entregable1/e1_tiendacol.md) |
+| E1: documento + diagrama (sin código) | Cierre técnico completo: [Markdown](docs/entregable1/e1_tiendacol.md), [PDF](docs/entregable1/e1_tiendacol.pdf) y [diagrama editable](docs/entregable1/arquitectura.drawio) |
 | E2: código + presentación + demo | No iniciado |
 
-Decisiones de arquitectura (ADRs), al 2026-09-29: plataforma **AWS Academy híbrida** (ADR-6), orquestación con **Airflow** (ADR-5), componente libre **DynamoDB** (ADR-4), y **Kafka con at-least-once** y **Spark** acordados por el equipo (ADR-1 y ADR-2, por redactar). El estado de cada una está en la §7 de [CLAUDE.md](CLAUDE.md).
+Decisiones de arquitectura aprobadas para el E1: plataforma **AWS Academy híbrida** (ADR-6), orquestación con **Airflow** (ADR-5), componente libre **DynamoDB** (ADR-4), **Delta Lake** (ADR-3), **Spark** (ADR-2) y **Kafka con at-least-once** (ADR-1). El estado de cada una está en la §7 de [CLAUDE.md](CLAUDE.md).
 
 ## Estructura del repositorio
 
@@ -41,8 +41,19 @@ Las carpetas de componentes son marcadores de posición para E2: cada una tiene 
 │   └── batch/              # Bronze → Silver → Gold
 ├── orchestration/          # DAG(s)
 ├── serving/                # componente libre, alertas, tableros y consultas
+├── scripts/                # herramientas reproducibles, incluida la exportación del E1
 └── tests/                  # verificación de los RF
 ```
+
+## Exportar el E1
+
+Con Python, Google Chrome y los paquetes `markdown` y `pypdf` instalados:
+
+```powershell
+python scripts/export_e1.py
+```
+
+El comando genera `docs/entregable1/e1_tiendacol.pdf`, cuenta sus páginas y falla si el cuerpo anterior al Anexo A supera las 15 páginas permitidas.
 
 ## Cómo colaborar
 
@@ -57,6 +68,6 @@ _Pendiente para E2._ Esta sección debe permitir a cualquiera levantar el pipeli
 | Rol | Integrante |
 |---|---|
 | P1 | Juan Simón Ospina Martínez |
-| P2 | _(por definir)_ |
-| P3 | _(por definir)_ |
-| P4 | _(por definir)_ |
+| P2 | Sebastián Durán |
+| P3 | Daniel Arcila Salazar |
+| P4 | Juan José Díaz Rodríguez |
