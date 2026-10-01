@@ -40,7 +40,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (aprobad
 | **Nombre del proyecto** | TiendaCol en tiempo real |
 | **Dominio** | E-commerce: marketplace multivendedor |
 | **Profesor** | Andrés Sacre Alzate |
-| **Fecha de entrega** | 30 de septiembre de 2026 |
+| **Fecha de entrega** | 30/09/2026 |
 | **Repositorio** | https://github.com/juansimonEAFIT/Proyecto_sistemas-Intensivos-datos |
 
 ### Integrantes
@@ -167,7 +167,7 @@ Para que los RF sean "trazables al diagrama", anotar sobre cada caja los ID de l
 Rúbrica (25 %): legible sin explicación adicional. Si necesita más de 2 minutos de explicación, le falta claridad.
 -->
 
-**Fuente editable:** [archivo Draw.io del repositorio (`arquitectura.drawio`)](arquitectura.drawio) · **Enlace compartido:** [abrir el diagrama editable en Google Drive / Draw.io](https://drive.google.com/file/d/1QLkonryVOkKJahqjeaVKBIWeIkB8mAZT/view?usp=sharing)
+**Fuente editable:** [archivo Draw.io del repositorio (`arquitectura.drawio`)](arquitectura.drawio) · **Enlace compartido:** [https://drive.google.com/file/d/1QLkonryVOkKJahqjeaVKBIWeIkB8mAZT/view](https://drive.google.com/file/d/1QLkonryVOkKJahqjeaVKBIWeIkB8mAZT/view)
 
 ![Diagrama de arquitectura de TiendaCol](arquitectura.svg)
 
