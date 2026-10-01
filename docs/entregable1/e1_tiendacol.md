@@ -50,7 +50,7 @@ VALORES COMPARTIDOS: usar exactamente los mismos en todas las secciones (propues
 | `Juan Simón Ospina Martínez` | `1000341990` |
 | `Sebastián Durán` | `1000315087` |
 | `Daniel Arcila Salazar` | `1000331599` |
-| `[Nombre completo P4]` | `[código]` |
+| `Juan Jose Diaz Rodriguez` | `1000362038` |
 
 <div style="page-break-after: always;"></div>
 
